@@ -1,0 +1,35 @@
+{
+    "general": {
+        "package": "MountFix",
+        "name": "MountFix",
+        "version": "1.0.0.0",
+        "depends": [],
+        "conflicts": [],
+        "developer": "Pablo",
+        "maintainer": "Pablo",
+        "email": "ketonal80@gmail.com",
+        "website": "",
+        "architecture": "x86-64",
+        "firmware": "5.0"
+    },
+    "adm-desktop": {
+        "app": {
+            "type": "internal",
+            "js": [
+                "mountfix.js"
+            ],
+            "css": [],
+            "module": "AS.ARC.apps.MountFix.main",
+            "langTag": "MOUNT_FIX"
+        }
+    },
+    "register": {
+        "symbolic-link": { },
+        "share-folder": [],
+        "boot-priority": {
+            "start-order": 2,
+            "stop-order": 2
+        },
+        "port": []
+    }
+}

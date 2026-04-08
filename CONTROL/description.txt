@@ -1,0 +1,1 @@
+MountFix is a tool to allow users move .@plugins to different volume (possible mounted on a SSD)
