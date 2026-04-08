@@ -39,6 +39,13 @@ echo "Temp folder crated: $TEMP_FOLDER"
 cp -r CONTROL "$TEMP_FOLDER/"
 cp -r webman "$TEMP_FOLDER/"
 
+# 2.1. Check & create out folder
+
+if [ ! -d "$OUT_FOLDER" ]; then
+    echo "$OUT_FOLDER folder not found. Creating..."
+    mkdir -p "$OUT_FOLDER"
+fi
+
 # 3. Pack app
 ./apkg-tools_py3.py create "$TEMP_FOLDER/" --destination "$OUT_FOLDER/"
 
