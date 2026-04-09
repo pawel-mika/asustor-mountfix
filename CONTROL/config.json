@@ -2,7 +2,7 @@
   "general": {
     "package": "MountFix",
     "name": "MountFix",
-    "version": "0.0.0.8",
+    "version": "0.0.0.21",
     "depends": [],
     "conflicts": [],
     "developer": "Pablo",

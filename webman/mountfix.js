@@ -1,6 +1,5 @@
 /**
  * MountFix Application for ASUSTOR ADM
- * Full Integrated Version with Professional Footer and Form Panels
  */
 
 // 1. Definition of the application core (UI and Logic)
@@ -52,11 +51,20 @@ Ext.define("AS.ARC.apps.MountFix.core", {
                         xtype: 'combo',
                         fieldLabel: 'Select Volume',
                         name: 'target_volume',
-                        store: [],
-                        value: '',
+                        store: {
+                            fields: ['volume', 'mountPoint', 'freeSpace'],
+                            data: []
+                        },
                         queryMode: 'local',
+                        displayField: 'volume',
+                        valueField: 'volume',
                         editable: false,
-                        triggerAction: 'all'
+                        triggerAction: 'all',
+                        tpl: Ext.create('Ext.XTemplate',
+                            '<tpl for=".">',
+                            '<div class="x-boundlist-item">{volume} ({mountPoint}) - Free: {freeSpace}</div>',
+                            '</tpl>'
+                        )
                     }]
                 },
 
@@ -130,7 +138,7 @@ Ext.define("AS.ARC.apps.MountFix.core", {
                     html: '',
                     height: 20,
                     style: 'color: #333; font-size: 12px; font-weight: bold;',
-                    margin: '0 0 0 10'
+                    margin: '0 10 0 10'
                 },
                 { xtype: 'tbfill' }, // Filler moves buttons to the right
                 {
@@ -158,7 +166,7 @@ Ext.define("AS.ARC.apps.MountFix.core", {
             app: fn.app,
             id: fn.id,
             title: "MountFix",
-            width: 580,
+            width: 480,
             height: 600,
             layout: "fit",
             iconCls: "as-app-icon-MountFix",
@@ -178,9 +186,8 @@ Ext.define("AS.ARC.apps.MountFix.core", {
     updateStatus: function (message, isError) {
         var statusCont = this.win.down('#statusInfo');
         var color = isError ? '#cc0000' : '#007dff';
-        var icon = isError ? 'alert.png' : 'common-icon_16X16_status_tip_ok.png';
-
-        statusCont.update('<img src="resources/images/icons/common_16x16/' + icon + '" style="vertical-align:middle; margin-right:5px;">' + message);
+        // var icon = isError ? 'alert.png' : 'common-icon_16X16_status_tip_ok.png';
+        // statusCont.update('<img src="resources/images/icons/common_16x16/' + icon + '" style="vertical-align:middle; margin-right:5px;">' + message);
         statusCont.el.setStyle('color', color);
         statusCont.el.setOpacity(1);
 
@@ -201,18 +208,7 @@ Ext.define("AS.ARC.apps.MountFix.core", {
             success: function (json) {
                 console.log("Config loaded:", json);
                 page.cgiConfig = json; // Store config for later use
-                var mappedApps = (page.cgiConfig.allApps || []).map(name => ({ name, enabled: false, status: 'Ready' }));
-                var grid = page.win.down('#appGrid');
-                if (grid) {
-                    grid.getStore().loadData(mappedApps);
-                }
-                if (page.cgiConfig.volumes) {
-                    var combo = page.win.down('combo[name=target_volume]');
-                    if (combo) {
-                        var volData = json.volumes.map(function (v) { return [v, v]; });
-                        combo.getStore().loadData(volData);
-                    }
-                }
+                page.setConfig(page.cgiConfig); // Update UI with loaded config
             },
             failure: function () {
                 console.error("Failed to load config");
@@ -221,31 +217,57 @@ Ext.define("AS.ARC.apps.MountFix.core", {
     },
 
     saveConfig: function () {
-        var fn = this;
-        var panel = fn.win.down('#mainPanel');
-
+        var page = this;
         // Masking window during save
-        fn.win.el.mask("Saving changes...");
-
-        // Retrieving data from the form
-        var values = panel.getValues();
-
+        page.win.el.mask("Saving changes...");
         // Simulation of sending to CGI
         AS.ARC.ajax({
-            url: fn.apiUrl,
-            params: {
-                act: 'save',
-                data: Ext.encode(values)
-            },
+            url: AS.ARC.util.getApiUrlWithSid(page.apiUrl, { act: "set" }),
+            params: Ext.encode(page.getConfig()),
             success: function (json) {
-                fn.win.el.unmask();
-                fn.updateStatus("Settings applied successfully", false);
+                page.win.el.unmask();
+                page.updateStatus("Settings applied successfully", false);
             },
             failure: function (json) {
-                fn.win.el.unmask();
-                fn.updateStatus("Error: Unable to save settings", true);
-            }
+                page.win.el.unmask();
+                page.updateStatus("Error: Unable to save settings", true);
+            },
         });
+    },
+
+    setConfig: function (newConfig) {
+        var page = this;
+        var selectedApps = newConfig.config?.selectedApps.filter(a => a.enabled).map(({ name }) => name);
+        var mappedApps = (newConfig.allApps || []).map(name => ({ name, enabled: selectedApps.includes(name), status: 'Ready' }));
+        var grid = page.win.down('#appGrid');
+        if (grid) {
+            grid.getStore().loadData(mappedApps);
+        }
+        if (newConfig.volumes) {
+            var combo = page.win.down('combo[name=target_volume]');
+            if (combo) {
+                // var volData = newConfig.volumes.map(function (v) { return [v, v]; });
+                combo.getStore().loadData(newConfig.volumes);
+                combo.setValue(newConfig.config.target_volume);
+            }
+        }
+    },
+
+    getConfig: function () {
+        var page = this;
+        var panel = page.win.down('#mainPanel');
+        // Retrieving data from the form
+        var values = panel.getValues();
+        // 2. Grid (applications)
+        var grid = page.win.down('#appGrid');
+        var apps = [];
+        grid.getStore().each(rec =>
+            apps.push({
+                name: rec.get('name'),
+                enabled: rec.get('enabled')
+            }));
+        values.selectedApps = apps;
+        return values;
     },
 
     // Helper function to wrap AS.ARC.ajax into a Promise

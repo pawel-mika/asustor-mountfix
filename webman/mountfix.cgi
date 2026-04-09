@@ -4,6 +4,42 @@
 SRC_APPS_FOLDER="/usr/local/AppCentral"
 CONFIG_FILE="./mountfix.conf"
 
+# Functions
+
+## Function to get volumes and their details in JSON format
+get_volumes_json() {
+    local VOLUMES=""
+    local FIRST=1
+
+    for VOL in /volume[0-9]*; do
+        [ -d "$VOL" ] || continue
+
+        DF_LINE=$(df -h "$VOL" 2>/dev/null | awk 'NR==2')
+        MOUNT_POINT=$(echo "$DF_LINE" | awk '{print $1}')
+        TOTAL=$(echo "$DF_LINE" | awk '{print $2}')
+        FREE=$(echo "$DF_LINE" | awk '{print $4}')
+        USE_PCT=$(echo "$DF_LINE" | awk '{print $5}')
+
+        VOL_ESC=$(echo "$VOL" | sed 's/"/\\"/g')
+        MOUNT_ESC=$(echo "$MOUNT_POINT" | sed 's/"/\\"/g')
+
+        [ $FIRST -eq 0 ] && VOLUMES="$VOLUMES,"
+        FIRST=0
+
+        VOLUMES="$VOLUMES{
+            \"volume\": \"$VOL_ESC\",
+            \"mountPoint\": \"$MOUNT_ESC\",
+            \"freeSpace\": \"$FREE\",
+            \"totalSpace\": \"$TOTAL\",
+            \"usedPercent\": \"$USE_PCT\"
+        }"
+    done
+
+    echo "$VOLUMES"
+}
+
+# MAIN PART
+
 # HTTP Header
 echo "Content-type: application/json"
 echo ""
@@ -17,8 +53,7 @@ if [ "$ACTION" = "get" ]; then
     ALL_APPS=$(ls -1 "$SRC_APPS_FOLDER" 2>/dev/null | sed 's/"/\\"/g' | awk '{printf "\"%s\",", $0}' | sed 's/,$//')
 
     # 2. Getting the list of volumes (/volume1, /volume2 etc.)
-    # We look for folders in / starting with 'volume' followed by a digit
-    VOLUMES=$(ls -d /volume[0-9]* 2>/dev/null | sed 's/"/\\"/g' | awk '{printf "\"%s\",", $0}' | sed 's/,$//')
+    VOLUMES=$(get_volumes_json)
 
     # 3. Reading the current config (if it doesn't exist, create empty)
     if [ -f "$CONFIG_FILE" ]; then
@@ -39,13 +74,44 @@ if [ "$ACTION" = "get" ]; then
 EOF
 
 elif [ "$ACTION" = "set" ]; then
-    # Save logic (for simplicity, we assume data from POST)
-    # In the real ADM system, POST data is received via 'read' or the 'apkg-cgi-util' tool
+    MAX_BACKUPS=5
 
-    # Here the save to CONFIG_FILE happens
-    # echo "$POST_DATA" > "$CONFIG_FILE"
+    # 1. Reading POST body (raw JSON)
+    POST_DATA=$(cat)
+
+    # 2. Backup old config (if exists)
+    if [ -f "$CONFIG_FILE" ]; then
+        BACKUP_FILE="${CONFIG_FILE}.bak_$(date +%Y%m%d_%H%M%S)"
+        cp "$CONFIG_FILE" "$BACKUP_FILE"
+
+        # --- rotate backups ---
+        BACKUPS=$(ls -1t ${CONFIG_FILE}.bak_* 2>/dev/null)
+        COUNT=0
+
+        for FILE in $BACKUPS; do
+            COUNT=$((COUNT + 1))
+            if [ "$COUNT" -gt "$MAX_BACKUPS" ]; then
+                rm -f "$FILE"
+            fi
+        done
+    fi
+
+    # 3. Save to temporary file (safe write)
+    TMP_FILE="${CONFIG_FILE}.tmp"
+    echo "$POST_DATA" > "$TMP_FILE"
+
+    # (optionally) JSON validation if you have jq
+    if command -v jq >/dev/null 2>&1; then
+        if ! jq empty "$TMP_FILE" >/dev/null 2>&1; then
+            rm -f "$TMP_FILE"
+            echo '{"success": false, "error": "Invalid JSON"}'
+            exit 0
+        fi
+    fi
+
+    # 4. Atomic overwrite of config
+    mv "$TMP_FILE" "$CONFIG_FILE"
 
     echo '{"success": true, "msg": "Settings saved"}'
-else
-    echo '{"success": false, "error": "Unknown action"}'
 fi
+

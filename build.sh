@@ -3,8 +3,8 @@
 set -e # stop on error
 
 if [ "$EUID" -ne 0 ]; then
-    echo "This script must be run as root. Please run with sudo."
-    exit 1
+    echo "Re-running script with sudo..."
+    exec sudo "$0" "$@"
 fi
 
 # 0. Update version in CONTROL/config.json
@@ -47,7 +47,7 @@ if [ ! -d "$OUT_FOLDER" ]; then
 fi
 
 # 3. Pack app
-./apkg-tools_py3.py create "$TEMP_FOLDER/" --destination "$OUT_FOLDER/"
+./toolchain/apkg-tools_py3.py create "$TEMP_FOLDER/" --destination "$OUT_FOLDER/"
 
 # 4. Remove temp
 rm -rf "$TEMP_FOLDER"
