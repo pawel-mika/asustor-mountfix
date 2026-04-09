@@ -11,3 +11,8 @@ ADM Integrated UI: Native Look & Feel interface built with ExtJS.
 Boot-safe: Includes an init script (S01mountfix) to ensure mounts are established before apps start.
 
 Smart Cleanup: Graceful unmounting with process-check logic to prevent filesystem lockups during shutdown.
+
+## prerequisities (TBD)
+
+* installed entware(opkg) with following packages:
+  - jq
