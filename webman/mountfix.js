@@ -7,7 +7,8 @@ Ext.define("AS.ARC.apps.MountFix.core", {
     extend: "Ext.util.Observable",
 
     // Paths to API (adjust if folder name is different)
-    apiUrl: AS.ARC.util.getUserAppsPath() + "MountFix/" + "mountfix.cgi",
+    configApiUrl: AS.ARC.util.getUserAppsPath() + "MountFix/" + "config.cgi",
+    validateApiUrl: AS.ARC.util.getUserAppsPath() + "MountFix/" + "validate.cgi",
 
     cgiConfig: {}, // Placeholder for config loaded from CGI
 
@@ -22,7 +23,7 @@ Ext.define("AS.ARC.apps.MountFix.core", {
 
         // Store for the list of applications in the Sources section
         var appStore = Ext.create("Ext.data.Store", {
-            fields: ["name", "enabled", "status"],
+            fields: ["name", "enabled", "status", "sourceSize", "targetSize"],
             data: []
         });
 
@@ -50,7 +51,7 @@ Ext.define("AS.ARC.apps.MountFix.core", {
                     items: [{
                         xtype: 'combo',
                         fieldLabel: 'Select Volume',
-                        name: 'target_volume',
+                        name: 'targetVolume',
                         store: {
                             fields: ['volume', 'mountPoint', 'freeSpace'],
                             data: []
@@ -64,7 +65,12 @@ Ext.define("AS.ARC.apps.MountFix.core", {
                             '<tpl for=".">',
                             '<div class="x-boundlist-item">{volume} ({mountPoint}) - Free: {freeSpace}</div>',
                             '</tpl>'
-                        )
+                        ),
+                        listeners: {
+                            change: function (combo, newValue) {
+                                fn.validate();
+                            }
+                        }
                     }]
                 },
 
@@ -104,7 +110,19 @@ Ext.define("AS.ARC.apps.MountFix.core", {
                                     var color = (val === 'Ready') ? 'green' : 'gray';
                                     return '<span style="color:' + color + ';">' + val + '</span>';
                                 }
-                            }
+                            },
+                            {
+                                text: "Source Size",
+                                dataIndex: "sourceSize",
+                                flex: 1,
+                                menuDisabled: true
+                            },
+                            {
+                                text: "Target Size",
+                                dataIndex: "targetSize",
+                                flex: 1,
+                                menuDisabled: true
+                            },
                         ]
                     }]
                 },
@@ -118,7 +136,7 @@ Ext.define("AS.ARC.apps.MountFix.core", {
                         {
                             xtype: 'checkbox',
                             boxLabel: 'Auto-repair mount points on system boot',
-                            name: 'auto_repair',
+                            name: 'autoRepair',
                             checked: true
                         },
                         {
@@ -182,6 +200,10 @@ Ext.define("AS.ARC.apps.MountFix.core", {
         });
     },
 
+    getSelectedVolume: function () {
+        return this.win.down('combo[name=targetVolume]')?.getValue() ?? null;
+    },
+
     // Notification function in footer (fadeIn/fadeOut effect)
     updateStatus: function (message, isError) {
         var statusCont = this.win.down('#statusInfo');
@@ -203,12 +225,13 @@ Ext.define("AS.ARC.apps.MountFix.core", {
         var page = this;
 
         AS.ARC.ajax({
-            url: AS.ARC.util.getApiUrlWithSid(page.apiUrl, { act: "get" }),
+            url: AS.ARC.util.getApiUrlWithSid(page.configApiUrl, { act: "get" }),
             method: "GET",
             success: function (json) {
                 console.log("Config loaded:", json);
                 page.cgiConfig = json; // Store config for later use
                 page.setConfig(page.cgiConfig); // Update UI with loaded config
+                page.validate();
             },
             failure: function () {
                 console.error("Failed to load config");
@@ -222,7 +245,7 @@ Ext.define("AS.ARC.apps.MountFix.core", {
         page.win.el.mask("Saving changes...");
         // Simulation of sending to CGI
         AS.ARC.ajax({
-            url: AS.ARC.util.getApiUrlWithSid(page.apiUrl, { act: "set" }),
+            url: AS.ARC.util.getApiUrlWithSid(page.configApiUrl, { act: "set" }),
             params: Ext.encode(page.getConfig()),
             success: function (json) {
                 page.win.el.unmask();
@@ -235,20 +258,49 @@ Ext.define("AS.ARC.apps.MountFix.core", {
         });
     },
 
+    validate: function () {
+        var page = this;
+        var target = page.getSelectedVolume();
+
+        AS.ARC.ajax({
+            url: AS.ARC.util.getApiUrlWithSid(page.validateApiUrl, { act: "get", target }),
+            method: "GET",
+            success: function (json) {
+                console.log("validated:", json);
+                if (json.success && json.apps) {
+                    var grid = page.win.down('#appGrid');
+                    if (grid) {
+                        var store = grid.getStore();
+                        json.apps.forEach(function (app) {
+                            var record = store.findRecord('name', app.name, 0, false, false, true);
+                            if (record) {
+                                record.set(app);
+                            } else {
+                                store.add(app);
+                            }
+                        });
+                    }
+                }
+            },
+            failure: function () {
+                console.error("Failed to load validation data");
+            },
+        });
+    },
+
     setConfig: function (newConfig) {
         var page = this;
-        var selectedApps = newConfig.config?.selectedApps.filter(a => a.enabled).map(({ name }) => name);
-        var mappedApps = (newConfig.allApps || []).map(name => ({ name, enabled: selectedApps.includes(name), status: 'Ready' }));
+        var selectedApps = newConfig.config?.selectedApps?.filter(a => a.enabled).map(({ name }) => name) || [];
+        var mappedApps = (newConfig.allApps || []).map(name => ({ name, enabled: selectedApps.includes(name), status: '...' }));
         var grid = page.win.down('#appGrid');
         if (grid) {
             grid.getStore().loadData(mappedApps);
         }
         if (newConfig.volumes) {
-            var combo = page.win.down('combo[name=target_volume]');
+            var combo = page.win.down('combo[name=targetVolume]');
             if (combo) {
-                // var volData = newConfig.volumes.map(function (v) { return [v, v]; });
                 combo.getStore().loadData(newConfig.volumes);
-                combo.setValue(newConfig.config.target_volume);
+                combo.setValue(newConfig.config.targetVolume);
             }
         }
     },

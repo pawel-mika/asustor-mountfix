@@ -2,7 +2,9 @@
 
 # Paths
 SRC_APPS_FOLDER="/usr/local/AppCentral"
-CONFIG_FILE="./mountfix.conf"
+CONFIG_DIR="/usr/local/AppCentral/MountFix/etc"
+CONFIG_FILENAME="mountfix.conf"
+CONFIG_FILE="${CONFIG_DIR}/${CONFIG_FILENAME}"
 
 # Functions
 
@@ -59,7 +61,7 @@ if [ "$ACTION" = "get" ]; then
     if [ -f "$CONFIG_FILE" ]; then
         CURRENT_CONFIG=$(cat "$CONFIG_FILE")
     else
-        CURRENT_CONFIG='{"target_volume": "/volume1", "auto_repair": true}'
+        CURRENT_CONFIG='{"targetVolume": "/volume1", "autoRepair": true}'
     fi
 
     # 4. Assembling everything into one JSON
@@ -79,13 +81,17 @@ elif [ "$ACTION" = "set" ]; then
     # 1. Reading POST body (raw JSON)
     POST_DATA=$(cat)
 
+    # Ensure config directory exists
+    [ -d "$CONFIG_DIR" ] || mkdir -p "$CONFIG_DIR"
+
     # 2. Backup old config (if exists)
     if [ -f "$CONFIG_FILE" ]; then
         BACKUP_FILE="${CONFIG_FILE}.bak_$(date +%Y%m%d_%H%M%S)"
         cp "$CONFIG_FILE" "$BACKUP_FILE"
 
         # --- rotate backups ---
-        BACKUPS=$(ls -1t ${CONFIG_FILE}.bak_* 2>/dev/null)
+        # Search for backups specifically in the config directory using the filename pattern
+        BACKUPS=$(ls -1t "${CONFIG_DIR}/${CONFIG_FILENAME}.bak_"* 2>/dev/null)
         COUNT=0
 
         for FILE in $BACKUPS; do
@@ -96,7 +102,7 @@ elif [ "$ACTION" = "set" ]; then
         done
     fi
 
-    # 3. Save to temporary file (safe write)
+    # 3. Save to temporary file (safe write) in the same directory
     TMP_FILE="${CONFIG_FILE}.tmp"
     echo "$POST_DATA" > "$TMP_FILE"
 

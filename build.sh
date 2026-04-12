@@ -38,6 +38,7 @@ echo "Temp folder crated: $TEMP_FOLDER"
 # 2. Copy required
 cp -r CONTROL "$TEMP_FOLDER/"
 cp -r webman "$TEMP_FOLDER/"
+cp -r etc "$TEMP_FOLDER/"
 
 # 2.1. Check & create out folder
 

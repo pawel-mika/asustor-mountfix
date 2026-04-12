@@ -1,0 +1,19 @@
+# 1. Ignore absolutely everything by default
+/*
+
+# 2. Add exceptions - folders that Gemini MUST see
+!/CONTROL/
+!/webman/
+
+# 3. Exclude specifically the images folder inside webman
+/webman/images/
+
+# 4. Allow reading specific files in the main directory
+!/build.sh
+!/README.md
+
+# 5. Make sure that binary files inside allowed folders are ignored
+*.png
+*.jpg
+*.ico
+*.apk
