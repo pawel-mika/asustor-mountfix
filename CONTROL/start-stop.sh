@@ -1,11 +1,19 @@
 #!/bin/sh
 
-# List of mount points: "SOURCE_PATH:TARGET_PATH"
-# Add as many as you need, separated by space
-MOUNTS="
-/volume2/AppCentral/photogallery:/volume1/.@plugins/AppCentral/photogallery
-/volume2/AppCentral/docker-ce:/volume1/.@plugins/AppCentral/docker-ce
-"
+# 1. Load the common functions:
+# - get_mount_configs() to read the config and build the MOUNTS variable
+. ./common.sh
+
+# get the mount points form config
+MOUNTS=$(get_mount_configs)
+
+# Optional: Check if we actually got anything
+if [ $? -ne 0 ]; then
+    echo "Failed to load configuration from common.sh" >&2
+    exit 1 or handle error
+fi
+
+# echo "$MOUNTS" # For debugging: print the mount points we got from config
 
 # Function to perform the mount/umount action
 do_action() {
