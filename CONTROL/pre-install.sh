@@ -2,6 +2,10 @@
 
 case "$APKG_PKG_STATUS" in
 	install)
+		if ! command -v jq >/dev/null 2>&1; then
+			opkg update
+			opkg install jq
+		fi
 		;;
 	upgrade)
 		# Backup current config

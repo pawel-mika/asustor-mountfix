@@ -2,8 +2,10 @@
   "general": {
     "package": "MountFix",
     "name": "MountFix",
-    "version": "0.0.0.35",
-    "depends": [],
+    "version": "0.0.0.34",
+    "depends": [
+      "entware"
+    ],
     "conflicts": [],
     "developer": "Pablo",
     "maintainer": "Pablo",
