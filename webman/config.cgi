@@ -61,7 +61,7 @@ if [ "$ACTION" = "get" ]; then
     if [ -f "$CONFIG_FILE" ]; then
         CURRENT_CONFIG=$(cat "$CONFIG_FILE")
     else
-        CURRENT_CONFIG='{"targetVolume": "/volume1", "autoRepair": true}'
+        CURRENT_CONFIG='{"targetVolume": "/volume1", "autoRepair": true}' # TODO - maybe just empty {}?
     fi
 
     # 4. Assembling everything into one JSON

@@ -4,13 +4,21 @@
 # - get_mount_configs() to read the config and build the MOUNTS variable
 . ./common.sh
 
+# reduce tendency to use SWAP to minimum
+sysctl -w vm.swappiness=1
+# force the system to keep file and folder information in RAM
+sysctl -w vm.vfs_cache_pressure=10
+# prolong the time after which "dirty" data is written to disk (to 60s)
+sysctl -w vm.dirty_writeback_centisecs=6000
+sysctl -w vm.dirty_expire_centisecs=6000
+
 # get the mount points form config
 MOUNTS=$(get_mount_configs)
 
 # Optional: Check if we actually got anything
 if [ $? -ne 0 ]; then
     echo "Failed to load configuration from common.sh" >&2
-    exit 1 or handle error
+    exit 1 #or handle error
 fi
 
 # echo "$MOUNTS" # For debugging: print the mount points we got from config
