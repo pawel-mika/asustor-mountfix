@@ -2,7 +2,7 @@
 
 # 1. Load the common functions:
 # - get_mount_configs() to read the config and build the MOUNTS variable
-. ./common.sh
+. /volume1/.@plugins/AppCentral/MountFix/CONTROL/common.sh
 
 # reduce tendency to use SWAP to minimum
 sysctl -w vm.swappiness=1

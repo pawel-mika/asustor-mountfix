@@ -1,53 +1,21 @@
 #!/bin/sh
 
+# load common functions (like url_decode) - we can source it directly since it's a simple sh script without any side effects
+. /volume1/.@plugins/AppCentral/MountFix/webman/scripts/common.sh
+
 # Paths
 SRC_APPS_FOLDER="/usr/local/AppCentral"
 CONFIG_DIR="/usr/local/AppCentral/MountFix/etc"
 CONFIG_FILENAME="mountfix.conf"
 CONFIG_FILE="${CONFIG_DIR}/${CONFIG_FILENAME}"
 
-# Functions
-
-## Function to get volumes and their details in JSON format
-get_volumes_json() {
-    local VOLUMES=""
-    local FIRST=1
-
-    for VOL in /volume[0-9]*; do
-        [ -d "$VOL" ] || continue
-
-        DF_LINE=$(df -h "$VOL" 2>/dev/null | awk 'NR==2')
-        MOUNT_POINT=$(echo "$DF_LINE" | awk '{print $1}')
-        TOTAL=$(echo "$DF_LINE" | awk '{print $2}')
-        FREE=$(echo "$DF_LINE" | awk '{print $4}')
-        USE_PCT=$(echo "$DF_LINE" | awk '{print $5}')
-
-        VOL_ESC=$(echo "$VOL" | sed 's/"/\\"/g')
-        MOUNT_ESC=$(echo "$MOUNT_POINT" | sed 's/"/\\"/g')
-
-        [ $FIRST -eq 0 ] && VOLUMES="$VOLUMES,"
-        FIRST=0
-
-        VOLUMES="$VOLUMES{
-            \"volume\": \"$VOL_ESC\",
-            \"mountPoint\": \"$MOUNT_ESC\",
-            \"freeSpace\": \"$FREE\",
-            \"totalSpace\": \"$TOTAL\",
-            \"usedPercent\": \"$USE_PCT\"
-        }"
-    done
-
-    echo "$VOLUMES"
-}
-
-# MAIN PART
-
 # HTTP Header
 echo "Content-type: application/json"
 echo ""
 
 # Reading action from QUERY_STRING
-ACTION=$(echo "$QUERY_STRING" | grep -oE "act=[^&]+" | cut -d'=' -f2)
+#ACTION=$(echo "$QUERY_STRING" | grep -oE "act=[^&]+" | cut -d'=' -f2)
+ACTION=$(get_query_param "$QUERY_STRING" "act")
 
 if [ "$ACTION" = "get" ]; then
     # 1. Getting the list of applications (folders in AppCentral)
@@ -120,4 +88,3 @@ elif [ "$ACTION" = "set" ]; then
 
     echo '{"success": true, "msg": "Settings saved"}'
 fi
-
