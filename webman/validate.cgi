@@ -1,32 +1,10 @@
 #!/bin/sh
 
+# load common functions (like url_decode) - we can source it directly since it's a simple sh script without any side effects
+. /volume1/.@plugins/AppCentral/MountFix/webman/scripts/common.sh
+
 # Paths
 SRC_BASE="/volume1/.@plugins/AppCentral"
-
-# Function to get size in human readable format
-get_size_human() {
-    local dir="$1"
-    if [ -d "$dir" ]; then
-        du -sh "$dir" 2>/dev/null | awk '{print $1}'
-    else
-        echo "0"
-    fi
-}
-
-# Function to get size in KB for sorting/comparison
-get_size_kb() {
-    local dir="$1"
-    if [ -d "$dir" ]; then
-        du -sk "$dir" 2>/dev/null | awk '{print $1}'
-    else
-        echo "0"
-    fi
-}
-
-# Function to decode URL encoded strings
-url_decode() {
-    echo -e "$(echo "$1" | sed 's/+/ /g; s/%\([0-9A-F][0-9A-F]\)/\\x\1/g')"
-}
 
 # HTTP Header
 echo "Content-type: application/json"
@@ -34,9 +12,9 @@ echo ""
 
 # Reading action and target from QUERY_STRING
 # We use a simple way to parse parameters without external tools
-ACTION_RAW=$(echo "$QUERY_STRING" | grep -oE "(^|&)act=[^&]+" | cut -d'=' -f2)
-TARGET_VOL_RAW=$(echo "$QUERY_STRING" | grep -oE "(^|&)target=[^&]+" | cut -d'=' -f2)
-APP_PARAM_RAW=$(echo "$QUERY_STRING" | grep -oE "(^|&)app=[^&]+" | cut -d'=' -f2)
+ACTION_RAW=$(get_query_param "$QUERY_STRING" "act")
+TARGET_VOL_RAW=$(get_query_param "$QUERY_STRING" "target")
+APP_PARAM_RAW=$(get_query_param "$QUERY_STRING" "app")
 
 ACTION=$(url_decode "$ACTION_RAW")
 TARGET_VOL=$(url_decode "$TARGET_VOL_RAW")
