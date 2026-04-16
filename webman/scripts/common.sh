@@ -142,3 +142,22 @@ get_volumes_json() {
 
     echo "$VOLUMES"
 }
+
+# Function to get the list of installed applications in JSON format
+get_installed_apps_json() {
+    local json_file="/usr/builtin/etc/appcentral/installed.json"
+
+    if [ ! -f "$json_file" ]; then
+        echo "[]" # Zwróć pustą tablicę, jeśli plik nie istnieje
+        return 1
+    fi
+
+    jq -c '[.packages[] | {
+      package: .package,
+      name: (if (.name | type) == "object" then (.name["en-US"] // .package) else .name end),
+      enabled: .enabled,
+      icon: .icon
+    }]' "$json_file"
+
+#     jq -c '.packages[] | {package: .package, name: .name, enabled: .enabled, icon: .icon}' "$json_file"
+}
