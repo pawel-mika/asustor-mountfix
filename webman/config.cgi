@@ -9,10 +9,6 @@ CONFIG_DIR="/usr/local/AppCentral/MountFix/etc"
 CONFIG_FILENAME="mountfix.conf"
 CONFIG_FILE="${CONFIG_DIR}/${CONFIG_FILENAME}"
 
-# HTTP Header
-echo "Content-type: application/json"
-echo ""
-
 # Reading action from QUERY_STRING
 #ACTION=$(echo "$QUERY_STRING" | grep -oE "act=[^&]+" | cut -d'=' -f2)
 ACTION=$(get_query_param "$QUERY_STRING" "act")
@@ -21,6 +17,7 @@ if [ "$ACTION" = "get" ]; then
     # 1. Getting the list of applications (folders in AppCentral)
     # We exclude hidden files and take only folder names
     ALL_APPS=$(ls -1 "$SRC_APPS_FOLDER" 2>/dev/null | sed 's/"/\\"/g' | awk '{printf "\"%s\",", $0}' | sed 's/,$//')
+    APPS_JSON=$(get_installed_apps_json)
 
     # 2. Getting the list of volumes (/volume1, /volume2 etc.)
     VOLUMES=$(get_volumes_json)
@@ -34,14 +31,15 @@ if [ "$ACTION" = "get" ]; then
 
     # 4. Assembling everything into one JSON
     # We use variables to inject dynamic lists into the object
-    cat <<EOF
-{
-    "success": true,
-    "config": $CURRENT_CONFIG,
-    "allApps": [$ALL_APPS],
-    "volumes": [$VOLUMES]
-}
+    RESPONSE_DATA=$(cat <<EOF
+        "config": $CURRENT_CONFIG,
+        "allApps": [$ALL_APPS],
+        "apps": $APPS_JSON,
+        "volumes": [$VOLUMES]
 EOF
+)
+
+    send_response true "$RESPONSE_DATA"
 
 elif [ "$ACTION" = "set" ]; then
     MAX_BACKUPS=5
@@ -78,7 +76,7 @@ elif [ "$ACTION" = "set" ]; then
     if command -v jq >/dev/null 2>&1; then
         if ! jq empty "$TMP_FILE" >/dev/null 2>&1; then
             rm -f "$TMP_FILE"
-            echo '{"success": false, "error": "Invalid JSON"}'
+            send_response false '"error": "Invalid JSON"'
             exit 0
         fi
     fi
@@ -86,5 +84,5 @@ elif [ "$ACTION" = "set" ]; then
     # 4. Atomic overwrite of config
     mv "$TMP_FILE" "$CONFIG_FILE"
 
-    echo '{"success": true, "msg": "Settings saved"}'
+    send_response true '"msg": "Settings saved"'
 fi
