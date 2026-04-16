@@ -7,6 +7,7 @@ Ext.define("AS.ARC.apps.MountFix.core", {
     extend: "Ext.util.Observable",
 
     // Paths to API (adjust if folder name is different)
+    appsApiUrl: AS.ARC.util.getUserAppsPath() + "MountFix/" + "apps.cgi",
     configApiUrl: AS.ARC.util.getUserAppsPath() + "MountFix/" + "config.cgi",
     validateApiUrl: AS.ARC.util.getUserAppsPath() + "MountFix/" + "validate.cgi",
 
@@ -28,6 +29,7 @@ Ext.define("AS.ARC.apps.MountFix.core", {
         });
 
         this.loadConfig(); // Load initial config
+        this.getApps(); // Load list of apps
 
         // Main form panel (window base)
         var mainPanel = Ext.create('AS.ARC.formBase', {
@@ -218,6 +220,21 @@ Ext.define("AS.ARC.apps.MountFix.core", {
                 statusCont.el.fadeOut({ duration: 1000 });
             }
         }, 4000);
+    },
+
+    getApps: function () {
+        var page = this;
+
+        AS.ARC.ajax({
+            url: AS.ARC.util.getApiUrlWithSid(page.appsApiUrl, { act: "get" }),
+            method: "GET",
+            success: function (json) {
+                console.log("Apps:", json);
+            },
+            failure: function () {
+                console.error("Failed to load apps");
+            },
+        });
     },
 
     // Example of loading data from your CGI
