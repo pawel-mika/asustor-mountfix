@@ -1,5 +1,7 @@
 #!/bin/sh
 
+export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/opt/bin:/opt/sbin
+
 # Function to get size in human readable format
 get_size_human() {
     local dir="$1"
@@ -148,7 +150,7 @@ get_installed_apps_json() {
     local json_file="/usr/builtin/etc/appcentral/installed.json"
 
     if [ ! -f "$json_file" ]; then
-        echo "[]" # Zwróć pustą tablicę, jeśli plik nie istnieje
+        echo "[]" # return empty array if file does not exist
         return 1
     fi
 

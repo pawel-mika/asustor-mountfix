@@ -12,14 +12,13 @@ ACTION=$(url_decode "$ACTION_RAW")
 TARGET_VOL=$(url_decode "$TARGET_VOL_RAW")
 APP_PARAM=$(url_decode "$APP_PARAM_RAW")
 
+echo "Content-type: application/json"
+echo ""
+
 if [ "$ACTION" = "get" ]; then
     APPS_JSON=$(get_installed_apps_json)
 
-    echo "Content-type: application/json"
-    echo ""
-    echo "{\"success\": true, \"apps\": $APPS_JSON}"
+    echo '{"success": true, "apps": '"$APPS_JSON"'}'
 else
-    echo "Content-type: application/json"
-    echo ""
     echo '{"success": false, "error": "Invalid action"}'
 fi
