@@ -36,6 +36,18 @@ url_decode() {
     echo -e "$(echo "$1" | sed 's/+/ /g; s/%\([0-9A-F][0-9A-F]\)/\\x\1/g')"
 }
 
+# send response in JSON format
+send_response() {
+    local success=$1
+    local data=$2
+
+    echo "Content-type: application/json"
+    echo ""
+cat << EOF
+    {"success": $success, $data}
+EOF
+}
+
 # Check if /dev/mdX is an SSD by checking "rotational" param
 is_ssd() {
     local md_device=$1  # np. md2
