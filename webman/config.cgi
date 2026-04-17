@@ -43,42 +43,10 @@ elif [ "$ACTION" = "set" ]; then
     # 1. Reading POST body (raw JSON)
     POST_DATA=$(cat)
 
-    # Ensure config directory exists
-    [ -d "$CONFIG_DIR" ] || mkdir -p "$CONFIG_DIR"
-
-    # 2. Backup old config (if exists)
-    if [ -f "$CONFIG_FILE" ]; then
-        BACKUP_FILE="${CONFIG_FILE}.bak_$(date +%Y%m%d_%H%M%S)"
-        cp "$CONFIG_FILE" "$BACKUP_FILE"
-
-        # --- rotate backups ---
-        # Search for backups specifically in the config directory using the filename pattern
-        BACKUPS=$(ls -1t "${CONFIG_DIR}/${CONFIG_FILENAME}.bak_"* 2>/dev/null)
-        COUNT=0
-
-        for FILE in $BACKUPS; do
-            COUNT=$((COUNT + 1))
-            if [ "$COUNT" -gt "$MAX_BACKUPS" ]; then
-                rm -f "$FILE"
-            fi
-        done
+    if save_mountfix_config "$POST_DATA"; then
+        send_response true '"msg": "Settings saved"'
+    else
+        send_response false '"error": "Failed to save config"'
     fi
 
-    # 3. Save to temporary file (safe write) in the same directory
-    TMP_FILE="${CONFIG_FILE}.tmp"
-    echo "$POST_DATA" > "$TMP_FILE"
-
-    # (optionally) JSON validation if you have jq
-    if command -v jq >/dev/null 2>&1; then
-        if ! jq empty "$TMP_FILE" >/dev/null 2>&1; then
-            rm -f "$TMP_FILE"
-            send_response false '"error": "Invalid JSON"'
-            exit 0
-        fi
-    fi
-
-    # 4. Atomic overwrite of config
-    mv "$TMP_FILE" "$CONFIG_FILE"
-
-    send_response true '"msg": "Settings saved"'
 fi
