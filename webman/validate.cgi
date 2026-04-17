@@ -5,6 +5,7 @@
 
 # Paths
 SRC_BASE="/volume1/.@plugins/AppCentral"
+DST_FOLDER_NAME="AppCentral"
 
 # HTTP Header
 echo "Content-type: application/json"
@@ -73,7 +74,8 @@ if [ "$ACTION" = "get" ]; then
             \"sourceSizeKb\": $SRC_SIZE_KB,
             \"existsInTarget\": $EXISTS_IN_TARGET,
             \"targetSize\": \"$TARGET_SIZE\",
-            \"targetSizeKb\": $TARGET_SIZE_KB
+            \"targetSizeKb\": $TARGET_SIZE_KB,
+            \"mounted\": \"$MOUNTED\"
         }"
     done
 

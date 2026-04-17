@@ -48,6 +48,61 @@ cat << EOF
 EOF
 }
 
+# Function to load mountfix configuration or return defaults
+load_mountfix_config() {
+    local config_file="/usr/local/AppCentral/MountFix/etc/mountfix.conf"
+    if [ -f "$config_file" ]; then
+        cat "$config_file"
+    else
+        echo '{"targetVolume": "/volume2"}'
+    fi
+}
+
+# Save MountFix config with backup rotation
+save_mountfix_config() {
+    local config_dir="/usr/local/AppCentral/MountFix/etc"
+    local config_filename="mountfix.conf"
+    local config_file="$config_dir/$config_filename"
+    local max_backups=5
+    local post_data="$1"
+
+    # Ensure config directory exists
+    [ -d "$config_dir" ] || mkdir -p "$config_dir"
+
+    # Backup old config (if exists)
+    if [ -f "$config_file" ]; then
+        local backup_file="${config_file}.bak_$(date +%Y%m%d_%H%M%S)"
+        cp "$config_file" "$backup_file"
+
+        # Rotate backups
+        local backups count=0
+        backups=$(ls -1t "${config_dir}/${config_filename}.bak_"* 2>/dev/null)
+        for file in $backups; do
+            count=$((count + 1))
+            if [ "$count" -gt "$max_backups" ]; then
+                rm -f "$file"
+            fi
+        done
+    fi
+
+    # Save to temporary file (safe write)
+    local tmp_file="${config_file}.tmp"
+    echo "$post_data" > "$tmp_file"
+
+    # (optionally) JSON validation if jq is available
+    if command -v jq >/dev/null 2>&1; then
+        if ! jq empty "$tmp_file" >/dev/null 2>&1; then
+            rm -f "$tmp_file"
+            echo "error: invalid JSON" >&2
+            return 1
+        fi
+    fi
+
+    # Atomic overwrite of config
+    mv "$tmp_file" "$config_file"
+    return 0
+}
+
 # Check if /dev/mdX is an SSD by checking "rotational" param
 is_ssd() {
     local md_device=$1  # np. md2
