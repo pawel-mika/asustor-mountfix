@@ -23,11 +23,7 @@ if [ "$ACTION" = "get" ]; then
     VOLUMES=$(get_volumes_json)
 
     # 3. Reading the current config (if it doesn't exist, create empty)
-    if [ -f "$CONFIG_FILE" ]; then
-        CURRENT_CONFIG=$(cat "$CONFIG_FILE")
-    else
-        CURRENT_CONFIG='{"targetVolume": "/volume1", "autoRepair": true}' # TODO - maybe just empty {}?
-    fi
+    CURRENT_CONFIG=$(load_mountfix_config)
 
     # 4. Assembling everything into one JSON
     # We use variables to inject dynamic lists into the object
