@@ -2,7 +2,9 @@
 
 export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/opt/bin:/opt/sbin
 
+####################################################################
 # Function to get size in human readable format
+####################################################################
 get_size_human() {
     local dir="$1"
     if [ -d "$dir" ]; then
@@ -12,7 +14,9 @@ get_size_human() {
     fi
 }
 
+####################################################################
 # Function to get size in KB for sorting/comparison
+####################################################################
 get_size_kb() {
     local dir="$1"
     if [ -d "$dir" ]; then
@@ -22,7 +26,9 @@ get_size_kb() {
     fi
 }
 
+####################################################################
 # Function to extract parameter value from Query String
+####################################################################
 get_query_param() {
     local query_string="$1"
     local param_name="$2"
@@ -31,12 +37,16 @@ get_query_param() {
     echo "$query_string" | grep -oE "(^|&)${param_name}=[^&]+" | cut -d'=' -f2
 }
 
+####################################################################
 # Function to decode URL encoded strings
+####################################################################
 url_decode() {
     echo -e "$(echo "$1" | sed 's/+/ /g; s/%\([0-9A-F][0-9A-F]\)/\\x\1/g')"
 }
 
-# send response in JSON format
+####################################################################
+# Send response in JSON format
+####################################################################
 send_response() {
     local success=$1
     local data=$2
@@ -48,7 +58,9 @@ cat << EOF
 EOF
 }
 
+####################################################################
 # Function to load mountfix configuration or return defaults
+####################################################################
 load_mountfix_config() {
     local config_file="/usr/local/AppCentral/MountFix/etc/mountfix.conf"
     if [ -f "$config_file" ]; then
@@ -58,7 +70,9 @@ load_mountfix_config() {
     fi
 }
 
+####################################################################
 # Save MountFix config with backup rotation
+####################################################################
 save_mountfix_config() {
     local config_dir="/usr/local/AppCentral/MountFix/etc"
     local config_filename="mountfix.conf"
@@ -103,7 +117,9 @@ save_mountfix_config() {
     return 0
 }
 
+####################################################################
 # Check if /dev/mdX is an SSD by checking "rotational" param
+####################################################################
 is_ssd() {
     local md_device=$1  # np. md2
     # get the first slave device of the md device (e.g., md2 -> sda, sdb, etc.) and check if it's an SSD or HDD
@@ -123,7 +139,9 @@ is_ssd() {
     fi
 }
 
+####################################################################
 # Check if /volumeX is located on an SSD device
+####################################################################
 get_volume_rotational() {
     local target=$1 # It can be /volume1 or /dev/md1
     local dev_name=""
@@ -171,7 +189,9 @@ get_volume_rotational() {
     fi
 }
 
+####################################################################
 # Function to get volumes and their details in JSON format
+####################################################################
 get_volumes_json() {
     local VOLUMES=""
     local FIRST=1
@@ -212,7 +232,9 @@ get_volumes_json() {
     echo "$VOLUMES"
 }
 
+####################################################################
 # Function to get the list of installed applications in JSON format
+####################################################################
 get_installed_apps_json() {
     local json_file="/usr/builtin/etc/appcentral/installed.json"
 
@@ -229,4 +251,48 @@ get_installed_apps_json() {
     }]' "$json_file"
 
 #     jq -c '.packages[] | {package: .package, name: .name, enabled: .enabled, icon: .icon}' "$json_file"
+}
+
+####################################################################
+# Function to check if a specific app is mounted and return its source and target in JSON format
+####################################################################
+check_app_mount_json() {
+    local TARGET_VOLUME="$1"
+    local APP="$2"
+    local APPCENTRAL_DIR="AppCentral"
+    local SRC_VOL="/volume1"
+    local TGT="$TARGET_VOLUME/$APPCENTRAL_DIR/$APP"
+
+    # Missing target folder → null
+    [ -d "$TGT" ] || {
+        echo "null"
+        return
+    }
+
+#    # Is that a mount point?
+#    if ! awk -v tgt="$TGT" '$5 == tgt { found=1 } END { exit !found }' /proc/self/mountinfo; then
+#        echo "null"
+#        return
+#    fi
+
+    # Target inode
+    TGT_INODE=$(stat -c %d:%i "$TGT" 2>/dev/null) || {
+        echo "null"
+        return
+    }
+
+    # Searching for source folder (e.g., /volume1/.@plugins/AppCentral/APP)
+    SRC="$SRC_VOL/.@plugins/$APPCENTRAL_DIR/$APP"
+
+    if [ -d "$SRC" ]; then
+        SRC_INODE=$(stat -c %d:%i "$SRC" 2>/dev/null)
+
+        if [ "$SRC_INODE" = "$TGT_INODE" ]; then
+            printf '{"source":"%s","target":"%s"}\n' "$SRC" "$TGT"
+            return
+        fi
+    fi
+
+    # If we reach this point, it means the target exists but is not a mount of the expected source
+    echo "null"
 }
