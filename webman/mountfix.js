@@ -56,9 +56,10 @@ Ext.define("AS.ARC.apps.MountFix.core", {
           xtype: "fieldset",
           title: "Target Volume",
           collapsible: false,
-          layout: "hbox",
+          layout: "anchor",
           items: [
             {
+              anchor: "100%",
               xtype: "combo",
               fieldLabel: "Select Volume",
               name: "targetVolume",
@@ -319,7 +320,7 @@ Ext.define("AS.ARC.apps.MountFix.core", {
           if (grid) {
             var store = grid.getStore();
             json.apps.forEach(function (app) {
-              var record = store.findRecord("name",app.name,0,false,false,true);
+              var record = store.findRecord("name", app.name, 0, false, false, true);
               if (record) {
                 record.set(app);
               } else {
@@ -338,7 +339,7 @@ Ext.define("AS.ARC.apps.MountFix.core", {
   setConfig: function (newConfig) {
     var page = this;
     var selectedApps = newConfig.config?.selectedApps?.map(({ name }) => name) || [];
-    var mappedApps = (newConfig.apps || []).map(({package, enabled}) => ({
+    var mappedApps = (newConfig.apps || []).map(({ package, enabled }) => ({
       name: package,
       selected: selectedApps.includes(package),
       enabled,

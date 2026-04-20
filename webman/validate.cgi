@@ -67,6 +67,7 @@ if [ "$ACTION" = "get" ]; then
 
         [ $FIRST -eq 0 ] && APPS_JSON="$APPS_JSON,"
         FIRST=0
+        MOUNTED=$(check_app_mount_json "$TARGET_VOL" "$APP_NAME")
 
         APPS_JSON="$APPS_JSON{
             \"name\": \"$APP_NAME\",
@@ -75,7 +76,7 @@ if [ "$ACTION" = "get" ]; then
             \"existsInTarget\": $EXISTS_IN_TARGET,
             \"targetSize\": \"$TARGET_SIZE\",
             \"targetSizeKb\": $TARGET_SIZE_KB,
-            \"mounted\": \"$MOUNTED\"
+            \"mounted\": $MOUNTED
         }"
     done
 

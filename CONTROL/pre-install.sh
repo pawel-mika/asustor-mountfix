@@ -5,6 +5,7 @@ case "$APKG_PKG_STATUS" in
 		if ! command -v jq >/dev/null 2>&1; then
 			opkg update
 			opkg install jq
+			opkg install bash
 		fi
 		;;
 	upgrade)
