@@ -1,0 +1,18 @@
+.row-disabled {
+    opacity: 0.5;
+    pointer-events: none;
+    cursor: not-allowed;
+    background-color: #f4f4f4 !important;
+}
+
+.row-disabled .x-grid-cell {
+    user-select: none;
+}
+
+.item-disabled-hdd {
+    opacity: 0.5;
+    color: #888;
+    background-color: #f0f0f0 !important;
+    cursor: not-allowed;
+    pointer-events: none; /* Blokuje kliknięcia na poziomie przeglądarki */
+}
