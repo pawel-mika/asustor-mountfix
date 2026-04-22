@@ -2,7 +2,7 @@
   "general": {
     "package": "MountFix",
     "name": "MountFix",
-    "version": "0.0.0.62",
+    "version": "0.0.0.65",
     "depends": [
       "entware"
     ],
@@ -20,7 +20,9 @@
       "js": [
         "mountfix.js"
       ],
-      "css": [],
+      "css": [
+        "mountfix.css"
+      ],
       "module": "AS.ARC.apps.MountFix.main",
       "langTag": "MOUNT_FIX"
     }

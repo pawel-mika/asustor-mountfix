@@ -6,6 +6,8 @@
 Ext.define("AS.ARC.apps.MountFix.core", {
   extend: "Ext.util.Observable",
 
+  maskStack: [],
+
   // Paths to API (adjust if folder name is different)
   appsApiUrl: AS.ARC.util.getUserAppsPath() + "MountFix/" + "apps.cgi",
   configApiUrl: AS.ARC.util.getUserAppsPath() + "MountFix/" + "config.cgi",
@@ -36,9 +38,6 @@ Ext.define("AS.ARC.apps.MountFix.core", {
       data: [],
     });
 
-    this.loadConfig(); // Load initial config
-    this.getApps(); // Load list of apps
-
     // Main form panel (window base)
     var mainPanel = Ext.create("AS.ARC.formBase", {
       itemId: "mainPanel",
@@ -64,7 +63,7 @@ Ext.define("AS.ARC.apps.MountFix.core", {
               fieldLabel: "Select Volume",
               name: "targetVolume",
               store: {
-                fields: ["volume", "mountPoint", "freeSpace"],
+                fields: ["volume", "mountPoint", "freeSpace", "totalSpace", "usedPercent", "isSSD"],
                 data: [],
               },
               queryMode: "local",
@@ -75,10 +74,19 @@ Ext.define("AS.ARC.apps.MountFix.core", {
               tpl: Ext.create(
                 "Ext.XTemplate",
                 '<tpl for=".">',
-                '<div class="x-boundlist-item">{volume} ({mountPoint}) - Free: {freeSpace}</div>',
+                '<div class="x-boundlist-item {[!values.isSSD ? "x-item-disabled" : ""]}">',
+                "{volume} ({mountPoint}) - {freeSpace} of {totalSpace} free, ({usedPercent} used) ",
+                "[",
+                '<tpl if="isSSD">SSD</tpl>',
+                '<tpl if="!isSSD">HDD</tpl>',
+                "]",
+                "</div>",
                 "</tpl>",
               ),
               listeners: {
+                beforeselect: function (combo, record) {
+                  return record.get("isSSD");
+                },
                 change: function (combo, newValue) {
                   fn.validate();
                 },
@@ -103,6 +111,21 @@ Ext.define("AS.ARC.apps.MountFix.core", {
               columnLines: true,
               scrollable: true,
               padding: "0 0 30 0",
+              viewConfig: {
+                getRowClass: function (record) {
+                  return record.get("enabled") ? "row-disabled" : "";
+                },
+              },
+              selModel: {
+                allowDeserialization: true,
+                listeners: {
+                  beforeselect: function (sm, record) {
+                    if (record.get("enabled")) {
+                      return false;
+                    }
+                  },
+                },
+              },
               columns: [
                 {
                   xtype: "checkcolumn",
@@ -117,6 +140,20 @@ Ext.define("AS.ARC.apps.MountFix.core", {
                   dataIndex: "enabled",
                   width: 60,
                   resizable: false,
+                  processEvent: function () {
+                    return false;
+                  },
+                  renderer: function (value) {
+                    var color = value ? "green" : "gray";
+                    var text = value ? "Running" : "Stopped";
+                    return (
+                      '<span style="color:' +
+                      color +
+                      '; font-weight:light; font-size:9px;">● ' +
+                      text +
+                      "</span>"
+                    );
+                  },
                 },
                 {
                   text: "Application Name",
@@ -152,6 +189,7 @@ Ext.define("AS.ARC.apps.MountFix.core", {
                   dataIndex: "mounted",
                   flex: 1,
                   menuDisabled: true,
+                  renderer: (val) => val && val.target,
                 },
               ],
             },
@@ -184,9 +222,8 @@ Ext.define("AS.ARC.apps.MountFix.core", {
           xtype: "container",
           itemId: "statusInfo",
           html: "",
-          height: 20,
-          style: "color: #333; font-size: 12px; font-weight: bold;",
-          margin: "0 8 0 8",
+          style: "color: #333; font-size: 12px;",
+          margin: "0 16 0 16",
         },
         { xtype: "tbfill" }, // Filler moves buttons to the right
         {
@@ -215,9 +252,9 @@ Ext.define("AS.ARC.apps.MountFix.core", {
       id: fn.id,
       title: "MountFix",
       width: 480,
-      height: 600,
+      height: 640,
       layout: "fit",
-      iconCls: "as-app-icon-MountFix",
+      taskIcon: '..apps/MountFix/images/icon-app-task.png',
       items: [mainPanel],
       listeners: {
         afterrender: function (win) {
@@ -225,6 +262,8 @@ Ext.define("AS.ARC.apps.MountFix.core", {
           if (window.Ps) {
             Ps.initialize(win.body.dom);
           }
+          fn.loadConfig(); // Load initial config
+          fn.getApps(); // Load list of apps
         },
       },
     });
@@ -234,12 +273,16 @@ Ext.define("AS.ARC.apps.MountFix.core", {
     return this.win.down("combo[name=targetVolume]")?.getValue() ?? null;
   },
 
-  // Notification function in footer (fadeIn/fadeOut effect)
   updateStatus: function (message, isError) {
     var statusCont = this.win.down("#statusInfo");
     var color = isError ? "#cc0000" : "#007dff";
-    // var icon = isError ? 'alert.png' : 'common-icon_16X16_status_tip_ok.png';
-    // statusCont.update('<img src="resources/images/icons/common_16x16/' + icon + '" style="vertical-align:middle; margin-right:5px;">' + message);
+    var icon = isError ? "alert.png" : "common-icon_16X16_status_tip_ok.png";
+    statusCont.update(
+      '<img src="resources/images/icons/common_16x16/' +
+        icon +
+        '" style="vertical-align:middle; margin-right:5px;">' +
+        message,
+    );
     statusCont.el.setStyle("color", color);
     statusCont.el.setOpacity(1);
 
@@ -268,6 +311,9 @@ Ext.define("AS.ARC.apps.MountFix.core", {
   // Example of loading data from your CGI
   loadConfig: function () {
     var page = this;
+    var actionMsg = "Loading configuration...";
+    window.qq = this;
+    page.maskWindow(actionMsg);
 
     AS.ARC.ajax({
       url: AS.ARC.util.getApiUrlWithSid(page.configApiUrl, { act: "get" }),
@@ -277,28 +323,30 @@ Ext.define("AS.ARC.apps.MountFix.core", {
         page.cgiConfig = json; // Store config for later use
         page.setConfig(page.cgiConfig); // Update UI with loaded config
         page.validate();
+        page.unmaskWindow(actionMsg);
       },
       failure: function () {
         console.error("Failed to load config");
+        page.unmaskWindow(actionMsg);
       },
     });
   },
 
   saveConfig: function () {
     var page = this;
-    // Masking window during save
-    page.win.el.mask("Saving changes...");
-    // Simulation of sending to CGI
+    var actionMsg = "Saving configuration...";
+    page.maskWindow(actionMsg);
+
     AS.ARC.ajax({
       url: AS.ARC.util.getApiUrlWithSid(page.configApiUrl, { act: "set" }),
       params: Ext.encode(page.getConfig()),
       success: function (json) {
-        page.win.el.unmask();
         page.updateStatus("Settings applied successfully", false);
+        page.unmaskWindow(actionMsg);
       },
       failure: function (json) {
-        page.win.el.unmask();
         page.updateStatus("Error: Unable to save settings", true);
+        page.unmaskWindow(actionMsg);
       },
     });
   },
@@ -306,6 +354,8 @@ Ext.define("AS.ARC.apps.MountFix.core", {
   validate: function () {
     var page = this;
     var target = page.getSelectedVolume();
+    var actionMsg = "Validating configuration...";
+    page.maskWindow(actionMsg);
 
     AS.ARC.ajax({
       url: AS.ARC.util.getApiUrlWithSid(page.validateApiUrl, {
@@ -320,7 +370,14 @@ Ext.define("AS.ARC.apps.MountFix.core", {
           if (grid) {
             var store = grid.getStore();
             json.apps.forEach(function (app) {
-              var record = store.findRecord("name", app.name, 0, false, false, true);
+              var record = store.findRecord(
+                "name",
+                app.name,
+                0,
+                false,
+                false,
+                true,
+              );
               if (record) {
                 record.set(app);
               } else {
@@ -329,16 +386,19 @@ Ext.define("AS.ARC.apps.MountFix.core", {
             });
           }
         }
+        page.unmaskWindow(actionMsg);
       },
       failure: function () {
         console.error("Failed to load validation data");
+        page.unmaskWindow(actionMsg);
       },
     });
   },
 
   setConfig: function (newConfig) {
     var page = this;
-    var selectedApps = newConfig.config?.selectedApps?.map(({ name }) => name) || [];
+    var selectedApps =
+      newConfig.config?.selectedApps?.map(({ name }) => name) || [];
     var mappedApps = (newConfig.apps || []).map(({ package, enabled }) => ({
       name: package,
       selected: selectedApps.includes(package),
@@ -370,6 +430,30 @@ Ext.define("AS.ARC.apps.MountFix.core", {
       .data.items.map((r) => r.data.selected && { name: r.get("name") })
       .filter(Boolean);
     return values;
+  },
+
+  maskWindow: function (message) {
+    message = message || "Working...";
+    this.maskStack.push(message);
+    this.win &&
+      this.win.el &&
+      this.win.el.mask(this.maskStack[this.maskStack.length - 1]);
+  },
+
+  unmaskWindow: function (message) {
+    if (message) {
+      Ext.Array.remove(this.maskStack, message);
+    } else {
+      this.maskStack.pop();
+    }
+
+    if (this.maskStack.length > 0) {
+      this.win &&
+        this.win.el &&
+        this.win.el.mask(this.maskStack[this.maskStack.length - 1]);
+    } else {
+      this.win && this.win.el && this.win.el.unmask();
+    }
   },
 
   // Helper function to wrap AS.ARC.ajax into a Promise
