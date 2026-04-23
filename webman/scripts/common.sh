@@ -269,12 +269,6 @@ check_app_mount_json() {
         return
     }
 
-#    # Is that a mount point?
-#    if ! awk -v tgt="$TGT" '$5 == tgt { found=1 } END { exit !found }' /proc/self/mountinfo; then
-#        echo "null"
-#        return
-#    fi
-
     # Target inode
     TGT_INODE=$(stat -c %d:%i "$TGT" 2>/dev/null) || {
         echo "null"
@@ -295,4 +289,59 @@ check_app_mount_json() {
 
     # If we reach this point, it means the target exists but is not a mount of the expected source
     echo "null"
+}
+
+STATUS_FILE="/tmp/mountfix_transfer.status"
+
+####################################################################
+# Function to start background rsync for selected APP
+####################################################################
+start_app_transfer() {
+    local TARGET_VOLUME="$1"
+    local APP_NAME="$2"
+
+    local APPCENTRAL_DIR="AppCentral"
+    local SRC_VOL="/volume1"
+    local SRC="$SRC_VOL/.@plugins/$APPCENTRAL_DIR/$APP_NAME"
+    local TGT="$TARGET_VOLUME/$APPCENTRAL_DIR"
+
+    # prevent starting multiple transfers for the same app at the same time, which could cause conflicts and data corruption
+    if pgrep -f "rsync.*$APP_NAME" > /dev/null; then
+        echo '{"success": false, "error": "Transfer already in progress"}'
+        return
+    fi
+
+    echo "$APP_NAME" > "$STATUS_FILE"
+    echo "0% | Starting transfer..." >> "$STATUS_FILE"
+
+    (
+        rsync -a --info=progress2 "$SRC" "$TGT" >> "$STATUS_FILE" 2>&1
+
+        echo "$APP_NAME" > "$STATUS_FILE"
+        if [ $? -eq 0 ]; then
+            echo "100% | Completed" >> "$STATUS_FILE"
+        else
+            echo "ERROR | Transfer failed" >> "$STATUS_FILE"
+        fi
+    ) & 
+
+    echo '{"success": true, "message": "Transfer started in background"}'
+}
+
+####################################################################
+# Function to get current status for Frontend
+####################################################################
+get_transfer_status_json() {
+    if [ ! -f "$STATUS_FILE" ]; then
+        echo '{"progress": 0, "status": "idle"}'
+        return
+    fi
+
+    local first_line=$(head -n 1 "$STATUS_FILE")
+    local last_line=$(tail -n 1 "$STATUS_FILE")
+
+    local percent=$(echo "$last_line" | grep -oE '[0-9]+%' | tr -d '%')
+    [ -z "$percent" ] && percent=0
+
+    printf '{app: "%s", "progress": %s, "last_line": "%s"}\n' "$first_line" "$percent" "$last_line"
 }

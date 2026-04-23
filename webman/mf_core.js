@@ -176,15 +176,22 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                     title: 'Misc Options',
                     items: [
                         {
-                            xtype: 'checkbox',
-                            boxLabel: 'Auto-repair mount points on system boot',
-                            name: 'autoRepair',
-                            checked: true,
+                            xtype: 'button',
+                            text: 'Sync back',
+                            itemId: 'btnSyncBack',
+                            width: 85,
+                            handler: function () {
+                                // sync back should call backend to copy back data from the mounted volume/folder to the original location, 
+                                // this is needed when user wants to revert the changes but has some data written to the mounted volume that they want to keep. 
+                                // After successful sync back user can uncheck the "Fix" checkbox and click Apply to unmount the volume and revert changes
+                                // it could also be done periodically on each app change to keep data in sync, but for now let's keep it manual to avoid unnecessary writes and potential performance impact.
+                                console.log('sync back'); 
+                            },
                         },
                         {
                             xtype: 'displayfield',
-                            fieldLabel: 'Engine Version',
-                            value: 'v1.2.0 (Stable)',
+                            fieldLabel: 'Version',
+                            value: '0.0.0.74',
                         },
                     ],
                 },
