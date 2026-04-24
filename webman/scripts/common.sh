@@ -2,6 +2,11 @@
 
 export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/opt/bin:/opt/sbin
 
+readonly DIR_VOL1="/volume1"
+readonly DIR_PLUGINS=".@plugins"
+readonly DIR_APP_CENTRAL="AppCentral"
+readonly DIR_MF_PLUGINS=".@mfplugins"
+
 ####################################################################
 # Function to get size in human readable format
 ####################################################################
@@ -297,27 +302,26 @@ STATUS_FILE="/tmp/mountfix_transfer.status"
 # Function to start background rsync for selected APP
 ####################################################################
 start_app_transfer() {
-    local TARGET_VOLUME="$1"
-    local APP_NAME="$2"
+    local target_volume="$1"
+    local app_name="$2"
 
-    local APPCENTRAL_DIR="AppCentral"
-    local SRC_VOL="/volume1"
-    local SRC="$SRC_VOL/.@plugins/$APPCENTRAL_DIR/$APP_NAME"
-    local TGT="$TARGET_VOLUME/$APPCENTRAL_DIR"
+    local src_vol=$DIR_VOL1
+    local src="$src_vol/$DIR_PLUGINS/$DIR_APP_CENTRAL/$app_name"
+    local tgt="$target_volume/$DIR_APP_CENTRAL"
 
     # prevent starting multiple transfers for the same app at the same time, which could cause conflicts and data corruption
-    if pgrep -f "rsync.*$APP_NAME" > /dev/null; then
+    if pgrep -f "rsync.*$app_name" > /dev/null; then
         echo '{"success": false, "error": "Transfer already in progress"}'
         return
     fi
 
-    echo "$APP_NAME" > "$STATUS_FILE"
+    echo "$app_name" > "$STATUS_FILE"
     echo "0% | Starting transfer..." >> "$STATUS_FILE"
 
     (
-        rsync -a --info=progress2 "$SRC" "$TGT" >> "$STATUS_FILE" 2>&1
+        rsync -a --info=progress2 "$src" "$tgt" >> "$STATUS_FILE" 2>&1
 
-        echo "$APP_NAME" > "$STATUS_FILE"
+        echo "$app_name" > "$STATUS_FILE"
         if [ $? -eq 0 ]; then
             echo "100% | Completed" >> "$STATUS_FILE"
         else
@@ -325,7 +329,7 @@ start_app_transfer() {
         fi
     ) & 
 
-    echo '{"success": true, "message": "Transfer started in background"}'
+    echo '{"success": true, "message": "Transfer started in background", src: "'$src'", tgt: "'$tgt'"}'
 }
 
 ####################################################################
