@@ -2,7 +2,7 @@
   "general": {
     "package": "MountFix",
     "name": "MountFix",
-    "version": "0.0.0.75",
+    "version": "0.0.0.80",
     "depends": [
       "entware"
     ],

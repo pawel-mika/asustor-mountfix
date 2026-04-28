@@ -8,23 +8,35 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
     appsApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'apps.cgi',
     configApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'config.cgi',
     validateApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'validate.cgi',
+    migrateApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'migrate.cgi',
 
     cgiConfig: {}, // Placeholder for config loaded from CGI
 
+    selectedApp: null, // Currently selected app in the grid
+
     getSelectedVolume: function () {
         return this.win.down('combo[name=targetVolume]')?.getValue() ?? null;
+    },
+
+    // refresh ui elements related to actions based on current state (like selected app)
+    updateActionsUI: function () {
+        var btn = this.win.down('#btnCopyToTarget');
+        if (!btn) return;
+
+        if (this.selectedApp) {
+            btn.setText('Copy to target: ' + this.selectedApp.get('name'));
+            btn.enable();
+        } else {
+            btn.setText('Copy to target');
+            btn.disable();
+        }
     },
 
     updateStatus: function (message, isError) {
         var statusCont = this.win.down('#statusInfo');
         var color = isError ? '#cc0000' : '#007dff';
         var icon = isError ? 'alert.png' : 'common-icon_16X16_status_tip_ok.png';
-        statusCont.update(
-            '<img src="resources/images/icons/common_16x16/' +
-                icon +
-                '" style="vertical-align:middle; margin-right:5px;">' +
-                message,
-        );
+        statusCont.update('<img src="resources/images/icons/common_16x16/' + icon + '" style="vertical-align:middle; margin-right:5px;">' + message);
         statusCont.el.setStyle('color', color);
         statusCont.el.setOpacity(1);
 
@@ -62,6 +74,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             success: function (json) {
                 console.log('Config loaded:', json);
                 page.setMfConfig(json); // Update UI with loaded config
+                page.updateActionsUI();
                 page.validate();
                 page.unmaskWindow(actionMsg);
             },
@@ -132,11 +145,11 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         var page = this;
         page.cgiConfig = newConfig; // Store config
         var selectedApps = newConfig.config?.selectedApps?.map(({ name }) => name) || [];
-        var mappedApps = (newConfig.apps || []).map(({ package, enabled }) => ({
+        var mappedApps = (newConfig.apps || []).map(({ package, enabled, mounted }) => ({
             name: package,
             selected: selectedApps.includes(package),
             enabled,
-            status: '...',
+            status: 'unknown',
         }));
         var grid = page.win.down('#appGrid');
         if (grid) {
@@ -165,6 +178,28 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         return values;
     },
 
+    migrateSelectedApp: function () {
+        var page = this;
+        var actionMsg = 'Copyting application...';
+        var target = page.getSelectedVolume();
+        var app = page.selectedApp.data.name;
+        page.maskWindow(actionMsg);
+
+        AS.ARC.ajax({
+            url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'migrate', target, app }),
+            params: Ext.encode(page.getMfConfig()),
+            success: function (json) {
+                page.updateStatus('Copying started successfully', false);
+
+                page.unmaskWindow(actionMsg);
+            },
+            failure: function (json) {
+                page.updateStatus('Error: Unable to start copying', true);
+                page.unmaskWindow(actionMsg);
+            },
+        });
+    },
+
     maskWindow: function (message) {
         message = message || 'Working...';
         this.maskStack.push(message);
@@ -185,7 +220,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         }
     },
 
-    // Helper function to wrap AS.ARC.ajax into a Promise
+    // Helper function to wrap AS.ARC.ajax into a Promise - unused now, maybe remove later if not needed?
     requestConfig: function (params) {
         var me = this;
         return new Promise(function (resolve, reject) {

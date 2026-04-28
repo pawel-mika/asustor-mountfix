@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source ./buildJs.sh
+
 set -e # stop on error
 
 if [ "$EUID" -ne 0 ]; then
@@ -48,31 +50,7 @@ if [ ! -d "$OUT_FOLDER" ]; then
 fi
 
 # --- 2.2. Concatenate JS files ---
-echo "Merging JS files..."
-
-WEBMAN_DIR="$TEMP_FOLDER/webman"
-FINAL_FILENAME="mountfix.js"
-
-JS_FILES=(
-    "mf_actions.js"
-    "mf_core.js"
-    "mf_main.js"
-)
-
-> "$WEBMAN_DIR/$FINAL_FILENAME"
-
-for FILE in "${JS_FILES[@]}"; do
-    if [ -f "$WEBMAN_DIR/$FILE" ]; then
-        echo "Adding $FILE..."
-        cat "$WEBMAN_DIR/$FILE" >> "$WEBMAN_DIR/$FINAL_FILENAME"
-        echo -e "\n" >> "$WEBMAN_DIR/$FINAL_FILENAME"
-        rm "$WEBMAN_DIR/$FILE"
-    else
-        echo "Warning: File $FILE not found, skipping."
-    fi
-done
-
-echo "Success: All files merged into $FINAL_FILENAME"
+build_js "$TEMP_FOLDER" true
 
 # 3. Pack app
 ./toolchain/apkg-tools_py3.py create "$TEMP_FOLDER/" --destination "$OUT_FOLDER/"

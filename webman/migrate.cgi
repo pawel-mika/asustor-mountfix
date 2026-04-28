@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/bin/sh
 
 # load common functions (like url_decode) - we can source it directly since it's a simple sh script without any side effects
 . /volume1/.@plugins/AppCentral/MountFix/webman/scripts/common.sh
@@ -12,10 +12,14 @@ ACTION=$(url_decode "$ACTION_RAW")
 TARGET_VOL=$(url_decode "$TARGET_VOL_RAW")
 APP_PARAM=$(url_decode "$APP_PARAM_RAW")
 
-if [ "$ACTION" = "get" ]; then
-    APPS_JSON=$(get_installed_apps_json)
+if [ "$ACTION" = "migrate" ]; then
+    RESPONSE=$(start_app_transfer "$TARGET_VOL" "$APP_PARAM")
 
-    send_response true "\"apps\": $APPS_JSON"
+    send_response true "$RESPONSE"
+elif [ "$ACTION" = "status" ]; then
+    STATUS=$(get_transfer_status_JSON)
+
+    send_response true "$STATUS"
 else
-    send_response false '"error": "Invalid action"'
+    echo '{"success": false, "error": "Invalid action"}'
 fi
