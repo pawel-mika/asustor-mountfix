@@ -180,17 +180,17 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
     migrateSelectedApp: function () {
         var page = this;
-        var actionMsg = 'Copyting application...';
+        var actionMsg = 'Copying application...';
         var target = page.getSelectedVolume();
         var app = page.selectedApp.data.name;
         page.maskWindow(actionMsg);
-
+        // page.monitorMigrationStatus();
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'migrate', target, app }),
             params: Ext.encode(page.getMfConfig()),
             success: function (json) {
                 page.updateStatus('Copying started successfully', false);
-
+                page.monitorMigrationStatus();
                 page.unmaskWindow(actionMsg);
             },
             failure: function (json) {
@@ -198,6 +198,40 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 page.unmaskWindow(actionMsg);
             },
         });
+    },
+
+    monitorMigrationStatus: function () {
+        var page = this;
+        var actionMsg = 'Monitoring migration status...';
+        page.maskWindow(actionMsg);
+
+        var intervalId = setInterval(function () {
+            AS.ARC.ajax({
+                url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'status' }),
+                method: 'GET',
+                success: function (json) {
+                    const { app, progress } = json.result || {};
+                    const finished = progress == 100 && app === page.selectedApp.data.name;
+                    if (json.success) {
+                        page.updateStatus('Migrating: ' + app + ' - ' + progress + '%', false);
+                        if (finished) {
+                            clearInterval(intervalId);
+                            page.unmaskWindow(actionMsg);
+                            page.validate();
+                        }
+                    } else {
+                        page.updateStatus('Error: ' + json.message, true);
+                        clearInterval(intervalId);
+                        page.unmaskWindow(actionMsg);
+                    }
+                },
+                failure: function () {
+                    page.updateStatus('Error: Unable to check migration status', true);
+                    clearInterval(intervalId);
+                    page.unmaskWindow(actionMsg);
+                },
+            });
+        }, 500);
     },
 
     maskWindow: function (message) {

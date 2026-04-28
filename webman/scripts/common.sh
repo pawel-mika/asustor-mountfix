@@ -329,7 +329,7 @@ start_app_transfer() {
         fi
     ) & 
 
-    echo '{"success": true, "message": "Transfer started in background", src: "'$src'", tgt: "'$tgt'"}'
+    echo '{"success": true, "message": "Transfer started in background", "src": "'$src'", "tgt": "'$tgt'"}'
 }
 
 ####################################################################
@@ -347,5 +347,5 @@ get_transfer_status_json() {
     local percent=$(echo "$last_line" | grep -oE '[0-9]+%' | tr -d '%')
     [ -z "$percent" ] && percent=0
 
-    printf '{app: "%s", "progress": %s, "last_line": "%s"}\n' "$first_line" "$percent" "$last_line"
+    printf '{"app": "%s", "progress": %s, "lastLine": "%s"}\n' "$first_line" "$percent" "$last_line"
 }
