@@ -305,6 +305,7 @@ start_app_transfer() {
     local target_volume="$1"
     local app_name="$2"
 
+    local pipe="/tmp/rsync_progress.pipe"
     local src_vol=$DIR_VOL1
     local src="$src_vol/$DIR_PLUGINS/$DIR_APP_CENTRAL/$app_name"
     local tgt="$target_volume/$DIR_APP_CENTRAL"
@@ -319,7 +320,9 @@ start_app_transfer() {
     echo "0% | Starting transfer..." >> "$STATUS_FILE"
 
     (
-        rsync -a --info=progress2 "$src" "$tgt" >> "$STATUS_FILE" 2>&1
+        mkfifo "$pipe"
+        rsync -a --info=progress2 "$src" "$tgt" >> "$pipe" 2>&1 &
+        cat "$pipe" | tr '\r' '\n' >> $STATUS_FILE
 
         echo "$app_name" > "$STATUS_FILE"
         if [ $? -eq 0 ]; then

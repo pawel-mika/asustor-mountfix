@@ -184,12 +184,13 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         var target = page.getSelectedVolume();
         var app = page.selectedApp.data.name;
         page.maskWindow(actionMsg);
-
+        page.monitorMigrationStatus();
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'migrate', target, app }),
             params: Ext.encode(page.getMfConfig()),
             success: function (json) {
                 page.updateStatus('Copying started successfully', false);
+                // page.monitorMigrationStatus();
                 page.unmaskWindow(actionMsg);
             },
             failure: function (json) {
@@ -209,13 +210,14 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'status' }),
                 method: 'GET',
                 success: function (json) {
-                    console.log(json);
+                    const { app, progress } = json.result || {};
+                    const finished = progress == 100 && app === page.selectedApp.data.name;
                     if (json.success) {
-                        page.updateStatus(json.message, false);
-                        if (json.completed) {
+                        page.updateStatus('Migrating: ' + app + ' - ' + progress + '%', false);
+                        if (finished) {
                             clearInterval(intervalId);
                             page.unmaskWindow(actionMsg);
-                            page.validate(); // Refresh app statuses after migration completes
+                            page.validate();
                         }
                     } else {
                         page.updateStatus('Error: ' + json.message, true);

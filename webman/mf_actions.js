@@ -184,13 +184,12 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         var target = page.getSelectedVolume();
         var app = page.selectedApp.data.name;
         page.maskWindow(actionMsg);
-        // page.monitorMigrationStatus();
+        page.monitorMigrationStatus();
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'migrate', target, app }),
             params: Ext.encode(page.getMfConfig()),
             success: function (json) {
                 page.updateStatus('Copying started successfully', false);
-                page.monitorMigrationStatus();
                 page.unmaskWindow(actionMsg);
             },
             failure: function (json) {
