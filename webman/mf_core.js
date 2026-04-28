@@ -106,14 +106,18 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                             return false;
                                         }
                                     },
+                                    selectionchange: function (sm, selected) {
+                                        fn.selectedApp = selected.length > 0 ? selected[0] : null;
+                                        fn.updateActionsUI();
+                                    },
                                 },
                             },
                             columns: [
                                 {
                                     xtype: 'checkcolumn',
-                                    text: 'Fix',
+                                    text: 'Mount',
                                     dataIndex: 'selected',
-                                    width: 40,
+                                    width: 60,
                                     resizable: false,
                                 },
                                 {
@@ -141,7 +145,9 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     text: 'Current Status',
                                     dataIndex: 'status',
                                     width: 100,
-                                    renderer: function (val) {
+                                    renderer: function (v, m, row) {
+                                        const {mounted, enabled} = row.data;
+                                        const val = mounted ? 'Mounted' : enabled ? 'Not ready' : 'Ready';
                                         var color = val === 'Ready' ? 'green' : 'gray';
                                         return '<span style="color:' + color + ';">' + val + '</span>';
                                     },
@@ -176,17 +182,32 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                     title: 'Misc Options',
                     items: [
                         {
-                            xtype: 'button',
-                            text: 'Sync back',
-                            itemId: 'btnSyncBack',
-                            width: 85,
-                            handler: function () {
-                                // sync back should call backend to copy back data from the mounted volume/folder to the original location, 
-                                // this is needed when user wants to revert the changes but has some data written to the mounted volume that they want to keep. 
-                                // After successful sync back user can uncheck the "Fix" checkbox and click Apply to unmount the volume and revert changes
-                                // it could also be done periodically on each app change to keep data in sync, but for now let's keep it manual to avoid unnecessary writes and potential performance impact.
-                                console.log('sync back'); 
-                            },
+                            xtype: 'fieldcontainer',
+                            layout: 'hbox',
+                            defaultType: 'button',
+                            items: [
+                                {
+                                    xtype: 'button',
+                                    text: 'Copy to target',
+                                    itemId: 'btnCopyToTarget',
+                                    handler: function () {
+                                        fn.migrateSelectedApp();
+                                        console.log('copy to target');
+                                    },
+                                },
+                                {
+                                    xtype: 'button',
+                                    text: 'Sync back',
+                                    itemId: 'btnSyncBack',
+                                    handler: function () {
+                                        // sync back should call backend to copy back data from the mounted volume/folder to the original location,
+                                        // this is needed when user wants to revert the changes but has some data written to the mounted volume that they want to keep.
+                                        // After successful sync back user can uncheck the "Fix" checkbox and click Apply to unmount the volume and revert changes
+                                        // it could also be done periodically on each app change to keep data in sync, but for now let's keep it manual to avoid unnecessary writes and potential performance impact.
+                                        console.log('sync back');
+                                    },
+                                },
+                            ],
                         },
                         {
                             xtype: 'displayfield',
@@ -232,7 +253,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
             app: fn.app,
             id: fn.id,
             title: 'MountFix',
-            width: 480,
+            width: 640,
             height: 640,
             layout: 'fit',
             taskIcon: '..apps/MountFix/images/icon-app-task.png',

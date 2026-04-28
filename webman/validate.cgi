@@ -86,6 +86,7 @@ if [ "$ACTION" = "get" ]; then
     "apps": [$APPS_JSON]
 }
 EOF
+
 else
     echo '{"success": false, "error": "Invalid action"}'
 fi
