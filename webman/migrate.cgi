@@ -15,11 +15,11 @@ APP_PARAM=$(url_decode "$APP_PARAM_RAW")
 if [ "$ACTION" = "migrate" ]; then
     RESPONSE=$(start_app_transfer "$TARGET_VOL" "$APP_PARAM")
 
-    send_response true "$RESPONSE"
+    send_response true "\"result\": $RESPONSE"
 elif [ "$ACTION" = "status" ]; then
-    STATUS=$(get_transfer_status_JSON)
+    STATUS=$(get_transfer_status_json)
 
-    send_response true "$STATUS"
+    send_response true "\"result\": $STATUS"
 else
     echo '{"success": false, "error": "Invalid action"}'
 fi

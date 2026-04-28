@@ -8,6 +8,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
     appsApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'apps.cgi',
     configApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'config.cgi',
     validateApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'validate.cgi',
+    migrateApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'migrate.cgi',
 
     cgiConfig: {}, // Placeholder for config loaded from CGI
 
@@ -148,7 +149,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             name: package,
             selected: selectedApps.includes(package),
             enabled,
-            status: ''
+            status: 'unknown',
         }));
         var grid = page.win.down('#appGrid');
         if (grid) {
@@ -177,6 +178,60 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         return values;
     },
 
+    migrateSelectedApp: function () {
+        var page = this;
+        var actionMsg = 'Copying application...';
+        var target = page.getSelectedVolume();
+        var app = page.selectedApp.data.name;
+        page.maskWindow(actionMsg);
+
+        AS.ARC.ajax({
+            url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'migrate', target, app }),
+            params: Ext.encode(page.getMfConfig()),
+            success: function (json) {
+                page.updateStatus('Copying started successfully', false);
+                page.unmaskWindow(actionMsg);
+            },
+            failure: function (json) {
+                page.updateStatus('Error: Unable to start copying', true);
+                page.unmaskWindow(actionMsg);
+            },
+        });
+    },
+
+    monitorMigrationStatus: function () {
+        var page = this;
+        var actionMsg = 'Monitoring migration status...';
+        page.maskWindow(actionMsg);
+
+        var intervalId = setInterval(function () {
+            AS.ARC.ajax({
+                url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'status' }),
+                method: 'GET',
+                success: function (json) {
+                    console.log(json);
+                    if (json.success) {
+                        page.updateStatus(json.message, false);
+                        if (json.completed) {
+                            clearInterval(intervalId);
+                            page.unmaskWindow(actionMsg);
+                            page.validate(); // Refresh app statuses after migration completes
+                        }
+                    } else {
+                        page.updateStatus('Error: ' + json.message, true);
+                        clearInterval(intervalId);
+                        page.unmaskWindow(actionMsg);
+                    }
+                },
+                failure: function () {
+                    page.updateStatus('Error: Unable to check migration status', true);
+                    clearInterval(intervalId);
+                    page.unmaskWindow(actionMsg);
+                },
+            });
+        }, 500);
+    },
+
     maskWindow: function (message) {
         message = message || 'Working...';
         this.maskStack.push(message);
@@ -197,7 +252,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         }
     },
 
-    // Helper function to wrap AS.ARC.ajax into a Promise
+    // Helper function to wrap AS.ARC.ajax into a Promise - unused now, maybe remove later if not needed?
     requestConfig: function (params) {
         var me = this;
         return new Promise(function (resolve, reject) {
@@ -409,6 +464,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     text: 'Copy to target',
                                     itemId: 'btnCopyToTarget',
                                     handler: function () {
+                                        fn.migrateSelectedApp();
                                         console.log('copy to target');
                                     },
                                 },
