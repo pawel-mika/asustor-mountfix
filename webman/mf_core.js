@@ -179,7 +179,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                 // --- SECTION 3: MISC ---
                 {
                     xtype: 'fieldset',
-                    title: 'Misc Options',
+                    title: 'Options',
                     items: [
                         {
                             xtype: 'fieldcontainer',

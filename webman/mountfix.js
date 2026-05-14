@@ -20,15 +20,28 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
     // refresh ui elements related to actions based on current state (like selected app)
     updateActionsUI: function () {
-        var btn = this.win.down('#btnCopyToTarget');
-        if (!btn) return;
+        var btnCopyToTarget = this.win.down('#btnCopyToTarget');
+        var btnMount = this.win.down('#btnMount');
+        var btnUnmount = this.win.down('#btnUnmount');
+        var btnSyncBack = this.win.down('#btnSyncBack');
+        var btnBackupTarget = this.win.down('#btnBackupTarget');
+        if (!btnCopyToTarget) return;
 
         if (this.selectedApp) {
-            btn.setText('Copy to target: ' + this.selectedApp.get('name'));
-            btn.enable();
+            const mounted = !!this.selectedApp.get('mounted');
+            const existsInTarget = this.selectedApp.get('existsInTarget');
+            btnCopyToTarget.setText('Copy to target: ' + this.selectedApp.get('name'));
+            btnCopyToTarget.enable();
+            btnMount.setDisabled(!existsInTarget || mounted);
+            btnUnmount.setDisabled(!mounted);
+            btnSyncBack.setDisabled(!existsInTarget || mounted);
+            btnBackupTarget.setDisabled(!existsInTarget);
         } else {
-            btn.setText('Copy to target');
-            btn.disable();
+            btnCopyToTarget.setText('Copy to target');
+            btnCopyToTarget.disable();
+            btnMount.disable();
+            btnUnmount.disable();
+            btnBackupTarget.disable();
         }
     },
 
@@ -190,7 +203,6 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             params: Ext.encode(page.getMfConfig()),
             success: function (json) {
                 page.updateStatus('Copying started successfully', false);
-                // page.monitorMigrationStatus();
                 page.unmaskWindow(actionMsg);
             },
             failure: function (json) {
@@ -421,7 +433,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     dataIndex: 'status',
                                     width: 100,
                                     renderer: function (v, m, row) {
-                                        const {mounted, enabled} = row.data;
+                                        const { mounted, enabled } = row.data;
                                         const val = mounted ? 'Mounted' : enabled ? 'Not ready' : 'Ready';
                                         var color = val === 'Ready' ? 'green' : 'gray';
                                         return '<span style="color:' + color + ';">' + val + '</span>';
@@ -472,14 +484,39 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                 },
                                 {
                                     xtype: 'button',
+                                    text: 'Mount',
+                                    itemId: 'btnMount',
+                                    handler: function () {
+                                        console.log('mount');
+                                    },
+                                },
+                                {
+                                    xtype: 'button',
+                                    text: 'Unmount',
+                                    itemId: 'btnUnmount',
+                                    handler: function () {
+                                        console.log('unmount');
+                                    },
+                                },
+                                {
+                                    xtype: 'button',
                                     text: 'Sync back',
                                     itemId: 'btnSyncBack',
                                     handler: function () {
+                                        // only enable when unmounted
                                         // sync back should call backend to copy back data from the mounted volume/folder to the original location,
                                         // this is needed when user wants to revert the changes but has some data written to the mounted volume that they want to keep.
                                         // After successful sync back user can uncheck the "Fix" checkbox and click Apply to unmount the volume and revert changes
                                         // it could also be done periodically on each app change to keep data in sync, but for now let's keep it manual to avoid unnecessary writes and potential performance impact.
                                         console.log('sync back');
+                                    },
+                                },
+                                {
+                                    xtype: 'button',
+                                    text: 'Backup target',
+                                    itemId: 'btnBackupTarget',
+                                    handler: function () {
+                                        console.log('backup target');
                                     },
                                 },
                             ],

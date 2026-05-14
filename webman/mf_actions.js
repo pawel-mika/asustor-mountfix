@@ -20,15 +20,28 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
     // refresh ui elements related to actions based on current state (like selected app)
     updateActionsUI: function () {
-        var btn = this.win.down('#btnCopyToTarget');
-        if (!btn) return;
+        var btnCopyToTarget = this.win.down('#btnCopyToTarget');
+        var btnMount = this.win.down('#btnMount');
+        var btnUnmount = this.win.down('#btnUnmount');
+        var btnSyncBack = this.win.down('#btnSyncBack');
+        var btnBackupTarget = this.win.down('#btnBackupTarget');
+        if (!btnCopyToTarget) return;
 
         if (this.selectedApp) {
-            btn.setText('Copy to target: ' + this.selectedApp.get('name'));
-            btn.enable();
+            const mounted = !!this.selectedApp.get('mounted');
+            const existsInTarget = this.selectedApp.get('existsInTarget');
+            btnCopyToTarget.setText('Copy to target: ' + this.selectedApp.get('name'));
+            btnCopyToTarget.enable();
+            btnMount.setDisabled(!existsInTarget || mounted);
+            btnUnmount.setDisabled(!mounted);
+            btnSyncBack.setDisabled(!existsInTarget || mounted);
+            btnBackupTarget.setDisabled(!existsInTarget);
         } else {
-            btn.setText('Copy to target');
-            btn.disable();
+            btnCopyToTarget.setText('Copy to target');
+            btnCopyToTarget.disable();
+            btnMount.disable();
+            btnUnmount.disable();
+            btnBackupTarget.disable();
         }
     },
 
