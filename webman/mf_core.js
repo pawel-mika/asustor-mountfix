@@ -205,7 +205,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     text: 'Unmount',
                                     itemId: 'btnUnmount',
                                     handler: function () {
-                                        fn.unmountSelectedApp(false);
+                                        fn.unmountSelectedApp();
                                     },
                                 },
                                 {

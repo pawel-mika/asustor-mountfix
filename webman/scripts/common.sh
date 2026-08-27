@@ -325,8 +325,8 @@ check_app_mount_json() {
 
 ####################################################################
 # Bind-mount target volume data onto ADM plugin path
+# Thin wrapper: validate args, then mount --bind. No waits / fuser.
 # Usage: mount_app <targetVolume> <appName>
-# Prints JSON: {success, message|error, bindSource, bindTarget}
 ####################################################################
 mount_app() {
     local target_volume="$1"
@@ -345,36 +345,10 @@ mount_app() {
     bind_source=$(get_app_data_path "$target_volume" "$app_name")
     bind_target=$(get_app_plugin_path "$app_name")
 
-    if [ ! -d "$bind_source" ]; then
-        printf '{"success":false,"error":"Data path missing: %s"}\n' "$bind_source"
-        return 1
-    fi
-    if [ ! -d "$bind_target" ]; then
-        printf '{"success":false,"error":"Plugin path missing: %s"}\n' "$bind_target"
-        return 1
-    fi
-    if is_app_bind_mounted "$target_volume" "$app_name"; then
-        printf '{"success":true,"message":"Already mounted","bindSource":"%s","bindTarget":"%s"}\n' \
-            "$bind_source" "$bind_target"
-        return 0
-    fi
-
-    # Refuse if plugin path already has a different mount
-    if mount | grep -Fq " on ${bind_target} "; then
-        printf '{"success":false,"error":"Path already mounted by something else: %s"}\n' "$bind_target"
-        return 1
-    fi
-
     if ! mount --bind "$bind_source" "$bind_target" 2>/tmp/mountfix_mount.err; then
         local err
         err=$(tr '\n' ' ' </tmp/mountfix_mount.err | sed 's/"/\\"/g')
         printf '{"success":false,"error":"mount --bind failed: %s"}\n' "$err"
-        return 1
-    fi
-
-    if ! is_app_bind_mounted "$target_volume" "$app_name"; then
-        umount -l "$bind_target" 2>/dev/null
-        echo '{"success":false,"error":"Mount completed but inode check failed; rolled back"}'
         return 1
     fi
 
@@ -385,15 +359,14 @@ mount_app() {
 
 ####################################################################
 # Unmount bind from ADM plugin path
-# Usage: unmount_app <targetVolume> <appName> [force=0|1]
-# force=1: after wait, fuser -k then umount -l (for shutdown)
+# Thin wrapper: validate args, then umount. No waits / fuser / force.
+# Grace / fuser logic belongs in start-stop.sh (boot/shutdown only).
+# Usage: unmount_app <targetVolume> <appName>
 ####################################################################
 unmount_app() {
     local target_volume="$1"
     local app_name="$2"
-    local force="${3:-0}"
     local bind_source bind_target
-    local max_wait=20
 
     if ! validate_target_volume "$target_volume"; then
         echo '{"success":false,"error":"Invalid target volume"}'
@@ -407,46 +380,10 @@ unmount_app() {
     bind_source=$(get_app_data_path "$target_volume" "$app_name")
     bind_target=$(get_app_plugin_path "$app_name")
 
-    if ! is_app_bind_mounted "$target_volume" "$app_name"; then
-        # Not our bind — treat as success (idempotent) unless something else is mounted there
-        if mount | grep -Fq " on ${bind_target} "; then
-            printf '{"success":false,"error":"Path mounted but not by MountFix bind: %s"}\n' "$bind_target"
-            return 1
-        fi
-        printf '{"success":true,"message":"Already unmounted","bindSource":"%s","bindTarget":"%s"}\n' \
-            "$bind_source" "$bind_target"
-        return 0
-    fi
-
-    while [ "$max_wait" -gt 0 ]; do
-        if ! fuser -m "$bind_target" >/dev/null 2>&1; then
-            break
-        fi
-        sleep 2
-        max_wait=$((max_wait - 2))
-    done
-
-    if fuser -m "$bind_target" >/dev/null 2>&1; then
-        if [ "$force" = "1" ]; then
-            fuser -k -m "$bind_target" >/dev/null 2>&1
-            sleep 1
-        else
-            printf '{"success":false,"error":"Path busy (processes still using %s); stop the app or pass force=1"}\n' \
-                "$bind_target"
-            return 1
-        fi
-    fi
-
-    sync
-    if ! umount -l "$bind_target" 2>/tmp/mountfix_umount.err; then
+    if ! umount "$bind_target" 2>/tmp/mountfix_umount.err; then
         local err
         err=$(tr '\n' ' ' </tmp/mountfix_umount.err | sed 's/"/\\"/g')
         printf '{"success":false,"error":"umount failed: %s"}\n' "$err"
-        return 1
-    fi
-
-    if is_app_bind_mounted "$target_volume" "$app_name"; then
-        echo '{"success":false,"error":"Unmount reported ok but inode check still shows mounted"}'
         return 1
     fi
 
