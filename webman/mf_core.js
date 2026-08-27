@@ -16,7 +16,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
 
         // Store for the list of applications in the Sources section
         var appStore = Ext.create('Ext.data.Store', {
-            fields: ['name', 'selected', 'enabled', 'status', 'sourceSize', 'targetSize', 'mounted'],
+            fields: ['name', 'selected', 'enabled', 'status', 'sourceSize', 'targetSize', 'mounted', 'existsInTarget'],
             data: [],
         });
 
@@ -93,19 +93,16 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                             columnLines: true,
                             scrollable: true,
                             padding: '0 0 30 0',
+                            // Running apps stay selectable (need select to Unmount).
+                            // x-item-disabled blocked clicks — do not use it on rows.
                             viewConfig: {
                                 getRowClass: function (record) {
-                                    return record.get('enabled') ? 'x-item-disabled' : '';
+                                    return record.get('enabled') ? 'mf-app-running' : '';
                                 },
                             },
                             selModel: {
-                                allowDeserialization: true,
+                                allowDeselect: true,
                                 listeners: {
-                                    beforeselect: function (sm, record) {
-                                        if (record.get('enabled')) {
-                                            return false;
-                                        }
-                                    },
                                     selectionchange: function (sm, selected) {
                                         fn.selectedApp = selected.length > 0 ? selected[0] : null;
                                         fn.updateActionsUI();
@@ -200,7 +197,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     text: 'Mount',
                                     itemId: 'btnMount',
                                     handler: function () {
-                                        console.log('mount');
+                                        fn.mountSelectedApp();
                                     },
                                 },
                                 {
@@ -208,7 +205,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     text: 'Unmount',
                                     itemId: 'btnUnmount',
                                     handler: function () {
-                                        console.log('unmount');
+                                        fn.unmountSelectedApp(false);
                                     },
                                 },
                                 {

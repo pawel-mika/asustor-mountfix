@@ -1,10 +1,5 @@
-.row-disabled {
-    opacity: 0.5;
-    pointer-events: none;
-    cursor: not-allowed;
-    background-color: #f4f4f4 !important;
-}
-
-.row-disabled .x-grid-cell {
-    user-select: none;
+/* Running apps: visual hint only — must stay selectable (e.g. Unmount) */
+.mf-app-running {
+    opacity: 0.75;
+    background-color: #f8f8f8 !important;
 }
