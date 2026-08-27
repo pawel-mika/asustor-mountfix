@@ -1,8 +1,10 @@
 #!/bin/sh
 
-# 1. Load the common functions:
-# - get_mount_configs() to read the config and build the MOUNTS variable
+# Load:
+# - get_mount_configs() from CONTROL/common.sh
+# - mount_app / unmount_app from webman/scripts/common.sh
 . /volume1/.@plugins/AppCentral/MountFix/CONTROL/common.sh
+. /volume1/.@plugins/AppCentral/MountFix/webman/scripts/common.sh
 
 # reduce tendency to use SWAP to minimum
 sysctl -w vm.swappiness=1
@@ -12,69 +14,37 @@ sysctl -w vm.vfs_cache_pressure=10
 sysctl -w vm.dirty_writeback_centisecs=6000
 sysctl -w vm.dirty_expire_centisecs=6000
 
-# get the mount points form config
 MOUNTS=$(get_mount_configs)
 
-# Optional: Check if we actually got anything
 if [ $? -ne 0 ]; then
     echo "Failed to load configuration from common.sh" >&2
-    exit 1 #or handle error
+    exit 1
 fi
 
-# echo "$MOUNTS" # For debugging: print the mount points we got from config
-
-# Function to perform the mount/umount action
+# ENTRY format from get_mount_configs: "SRC:TGT"
+# SRC = /volumeN/AppCentral/APP, TGT = /volume1/.@plugins/AppCentral/APP
 do_action() {
     ACTION=$1
-    # for ENTRY in $MOUNTS; do
-    #     # Split the entry into source and target using colon as delimiter
-    #     SRC=$(echo "$ENTRY" | cut -d':' -f1)
-    #     TGT=$(echo "$ENTRY" | cut -d':' -f2)
+    FORCE_FLAG=0
+    [ "$ACTION" = "stop" ] && FORCE_FLAG=1
 
-    #     case "$ACTION" in
-    #         start)
-    #             # Ensure source exists and target is not already mounted
-    #             if [ -d "$SRC" ] && [ -d "$TGT" ]; then
-    #                 if ! mount | grep -q "on $TGT type"; then
-    #                     mount --bind "$SRC" "$TGT"
-    #                     echo "Mounted: $SRC -> $TGT"
-    #                 else
-    #                     echo "Already mounted: $TGT"
-    #                 fi
-    #             else
-    #                 echo "Error: Directory missing - SRC: $SRC or TGT: $TGT"
-    #             fi
-    #             ;;
-    #         stop)
-    #             echo "[$(date)] Checking if services are still active..."
+    for ENTRY in $MOUNTS; do
+        SRC=$(echo "$ENTRY" | cut -d':' -f1)
+        TGT=$(echo "$ENTRY" | cut -d':' -f2)
+        APP_NAME=$(basename "$SRC")
+        TARGET_VOL=$(echo "$SRC" | sed -E 's|^(/volume[0-9]+)/.*|\1|')
 
-    #             # 1. Give some grace period (e.g., 20 seconds and countdown)
-    #             # to allow K35 (Docker) to finish its own sleep 10 and cleanup.
-    #             MAX_WAIT=20
-    #             while [ $MAX_WAIT -gt 0 ]; do
-    #                 # Check if any process is still using our mount points
-    #                 if ! fuser -m "$TGT" > /dev/null 2>&1; then
-    #                     # Nobody is using it! We can safely unmount.
-    #                     break
-    #                 fi
-    #                 echo "Waiting for processes to release $TGT... ($MAX_WAIT s left)"
-    #                 sleep 2
-    #                 MAX_WAIT=$((MAX_WAIT - 2))
-    #             done
-
-    #             # 2. If after <>20s they are still running, THEN we get aggressive
-    #             if [ $MAX_WAIT -le 0 ]; then
-    #                 echo "Timeout reached! Forcesing cleanup to save the filesystem."
-    #                 fuser -k -m "$TGT" > /dev/null 2>&1
-    #                 sleep 1
-    #             fi
-
-    #             # 3. Clean unmount
-    #             sync
-    #             umount -l "$TGT"
-    #             ;;
-    #     esac
-    # done
+        case "$ACTION" in
+            start)
+                RESULT=$(mount_app "$TARGET_VOL" "$APP_NAME")
+                echo "[start] $APP_NAME: $RESULT"
+                ;;
+            stop)
+                RESULT=$(unmount_app "$TARGET_VOL" "$APP_NAME" "$FORCE_FLAG")
+                echo "[stop] $APP_NAME: $RESULT"
+                ;;
+        esac
+    done
 }
 
 case "$1" in

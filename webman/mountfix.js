@@ -9,6 +9,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
     configApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'config.cgi',
     validateApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'validate.cgi',
     migrateApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'migrate.cgi',
+    mountApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'mount.cgi',
 
     cgiConfig: {}, // Placeholder for config loaded from CGI
 
@@ -29,18 +30,21 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
         if (this.selectedApp) {
             const mounted = !!this.selectedApp.get('mounted');
-            const existsInTarget = this.selectedApp.get('existsInTarget');
+            const running = !!this.selectedApp.get('enabled');
+            const existsInTarget = !!this.selectedApp.get('existsInTarget');
             btnCopyToTarget.setText('Copy to target: ' + this.selectedApp.get('name'));
-            btnCopyToTarget.enable();
-            btnMount.setDisabled(!existsInTarget || mounted);
+            // Copy/Mount/Sync need stopped app; Unmount needs selection even when running
+            btnCopyToTarget.setDisabled(running || mounted);
+            btnMount.setDisabled(running || !existsInTarget || mounted);
             btnUnmount.setDisabled(!mounted);
-            btnSyncBack.setDisabled(!existsInTarget || mounted);
+            btnSyncBack.setDisabled(running || !existsInTarget || mounted);
             btnBackupTarget.setDisabled(!existsInTarget);
         } else {
             btnCopyToTarget.setText('Copy to target');
             btnCopyToTarget.disable();
             btnMount.disable();
             btnUnmount.disable();
+            btnSyncBack.disable();
             btnBackupTarget.disable();
         }
     },
@@ -145,6 +149,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                         });
                     }
                 }
+                page.updateActionsUI();
                 page.unmaskWindow(actionMsg);
             },
             failure: function () {
@@ -208,6 +213,50 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             failure: function (json) {
                 page.updateStatus('Error: Unable to start copying', true);
                 page.unmaskWindow(actionMsg);
+            },
+        });
+    },
+
+    mountSelectedApp: function () {
+        this.bindMountAction('mount', 'Mounting...', 'Mounted successfully');
+    },
+
+    unmountSelectedApp: function (force) {
+        this.bindMountAction('unmount', 'Unmounting...', 'Unmounted successfully', force ? 1 : 0);
+    },
+
+    bindMountAction: function (act, actionMsg, okMsg, force) {
+        var page = this;
+        var target = page.getSelectedVolume();
+        var app = page.selectedApp && page.selectedApp.get('name');
+
+        if (!target || !app) {
+            page.updateStatus('Error: Select volume and application first', true);
+            return;
+        }
+
+        var params = { act: act, target: target, app: app };
+        if (act === 'unmount') {
+            params.force = force ? 1 : 0;
+        }
+
+        page.maskWindow(actionMsg);
+        AS.ARC.ajax({
+            url: AS.ARC.util.getApiUrlWithSid(page.mountApiUrl, params),
+            method: 'GET',
+            success: function (json) {
+                page.unmaskWindow(actionMsg);
+                if (json && json.success) {
+                    page.updateStatus(json.message || okMsg, false);
+                    page.validate();
+                    page.updateActionsUI();
+                } else {
+                    page.updateStatus('Error: ' + ((json && json.error) || 'Operation failed'), true);
+                }
+            },
+            failure: function () {
+                page.unmaskWindow(actionMsg);
+                page.updateStatus('Error: Unable to ' + act + ' application', true);
             },
         });
     },
@@ -303,7 +352,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
 
         // Store for the list of applications in the Sources section
         var appStore = Ext.create('Ext.data.Store', {
-            fields: ['name', 'selected', 'enabled', 'status', 'sourceSize', 'targetSize', 'mounted'],
+            fields: ['name', 'selected', 'enabled', 'status', 'sourceSize', 'targetSize', 'mounted', 'existsInTarget'],
             data: [],
         });
 
@@ -380,19 +429,16 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                             columnLines: true,
                             scrollable: true,
                             padding: '0 0 30 0',
+                            // Running apps stay selectable (need select to Unmount).
+                            // x-item-disabled blocked clicks — do not use it on rows.
                             viewConfig: {
                                 getRowClass: function (record) {
-                                    return record.get('enabled') ? 'x-item-disabled' : '';
+                                    return record.get('enabled') ? 'mf-app-running' : '';
                                 },
                             },
                             selModel: {
-                                allowDeserialization: true,
+                                allowDeselect: true,
                                 listeners: {
-                                    beforeselect: function (sm, record) {
-                                        if (record.get('enabled')) {
-                                            return false;
-                                        }
-                                    },
                                     selectionchange: function (sm, selected) {
                                         fn.selectedApp = selected.length > 0 ? selected[0] : null;
                                         fn.updateActionsUI();
@@ -466,7 +512,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                 // --- SECTION 3: MISC ---
                 {
                     xtype: 'fieldset',
-                    title: 'Misc Options',
+                    title: 'Options',
                     items: [
                         {
                             xtype: 'fieldcontainer',
@@ -487,7 +533,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     text: 'Mount',
                                     itemId: 'btnMount',
                                     handler: function () {
-                                        console.log('mount');
+                                        fn.mountSelectedApp();
                                     },
                                 },
                                 {
@@ -495,7 +541,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     text: 'Unmount',
                                     itemId: 'btnUnmount',
                                     handler: function () {
-                                        console.log('unmount');
+                                        fn.unmountSelectedApp(false);
                                     },
                                 },
                                 {

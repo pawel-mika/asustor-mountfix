@@ -259,41 +259,200 @@ get_installed_apps_json() {
 }
 
 ####################################################################
+# Path / validation helpers for bind mounts
+# bind_source = data on target volume (e.g. /volume2/AppCentral/APP)
+# bind_target = ADM plugin path (e.g. /volume1/.@plugins/AppCentral/APP)
+####################################################################
+get_app_plugin_path() {
+    local app_name="$1"
+    echo "$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL/$app_name"
+}
+
+get_app_data_path() {
+    local target_volume="$1"
+    local app_name="$2"
+    echo "$target_volume/$DIR_APP_CENTRAL/$app_name"
+}
+
+validate_app_name() {
+    local app_name="$1"
+    [ -n "$app_name" ] || return 1
+    # AppCentral package names only — no path separators / traversal
+    echo "$app_name" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._+-]*$'
+}
+
+validate_target_volume() {
+    local target_volume="$1"
+    echo "$target_volume" | grep -qE '^/volume[0-9]+$'
+}
+
+# Returns 0 if plugin path is bind-mounted to target volume data
+is_app_bind_mounted() {
+    local target_volume="$1"
+    local app_name="$2"
+    local bind_source bind_target src_inode tgt_inode
+
+    bind_source=$(get_app_data_path "$target_volume" "$app_name")
+    bind_target=$(get_app_plugin_path "$app_name")
+
+    [ -d "$bind_source" ] && [ -d "$bind_target" ] || return 1
+
+    src_inode=$(stat -c %d:%i "$bind_source" 2>/dev/null) || return 1
+    tgt_inode=$(stat -c %d:%i "$bind_target" 2>/dev/null) || return 1
+
+    [ "$src_inode" = "$tgt_inode" ]
+}
+
+####################################################################
 # Function to check if a specific app is mounted and return its source and target in JSON format
+# JSON uses: source=plugin path, target=data path (UI "Mounted on")
 ####################################################################
 check_app_mount_json() {
     local TARGET_VOLUME="$1"
     local APP="$2"
-    local APPCENTRAL_DIR="AppCentral"
-    local SRC_VOL="/volume1"
-    local TGT="$TARGET_VOLUME/$APPCENTRAL_DIR/$APP"
+    local bind_source bind_target
 
-    # Missing target folder → null
-    [ -d "$TGT" ] || {
-        echo "null"
+    bind_source=$(get_app_data_path "$TARGET_VOLUME" "$APP")
+    bind_target=$(get_app_plugin_path "$APP")
+
+    if is_app_bind_mounted "$TARGET_VOLUME" "$APP"; then
+        printf '{"source":"%s","target":"%s"}\n' "$bind_target" "$bind_source"
         return
-    }
+    fi
 
-    # Target inode
-    TGT_INODE=$(stat -c %d:%i "$TGT" 2>/dev/null) || {
-        echo "null"
-        return
-    }
+    echo "null"
+}
 
-    # Searching for source folder (e.g., /volume1/.@plugins/AppCentral/APP)
-    SRC="$SRC_VOL/.@plugins/$APPCENTRAL_DIR/$APP"
+####################################################################
+# Bind-mount target volume data onto ADM plugin path
+# Usage: mount_app <targetVolume> <appName>
+# Prints JSON: {success, message|error, bindSource, bindTarget}
+####################################################################
+mount_app() {
+    local target_volume="$1"
+    local app_name="$2"
+    local bind_source bind_target
 
-    if [ -d "$SRC" ]; then
-        SRC_INODE=$(stat -c %d:%i "$SRC" 2>/dev/null)
+    if ! validate_target_volume "$target_volume"; then
+        echo '{"success":false,"error":"Invalid target volume"}'
+        return 1
+    fi
+    if ! validate_app_name "$app_name"; then
+        echo '{"success":false,"error":"Invalid app name"}'
+        return 1
+    fi
 
-        if [ "$SRC_INODE" = "$TGT_INODE" ]; then
-            printf '{"source":"%s","target":"%s"}\n' "$SRC" "$TGT"
-            return
+    bind_source=$(get_app_data_path "$target_volume" "$app_name")
+    bind_target=$(get_app_plugin_path "$app_name")
+
+    if [ ! -d "$bind_source" ]; then
+        printf '{"success":false,"error":"Data path missing: %s"}\n' "$bind_source"
+        return 1
+    fi
+    if [ ! -d "$bind_target" ]; then
+        printf '{"success":false,"error":"Plugin path missing: %s"}\n' "$bind_target"
+        return 1
+    fi
+    if is_app_bind_mounted "$target_volume" "$app_name"; then
+        printf '{"success":true,"message":"Already mounted","bindSource":"%s","bindTarget":"%s"}\n' \
+            "$bind_source" "$bind_target"
+        return 0
+    fi
+
+    # Refuse if plugin path already has a different mount
+    if mount | grep -Fq " on ${bind_target} "; then
+        printf '{"success":false,"error":"Path already mounted by something else: %s"}\n' "$bind_target"
+        return 1
+    fi
+
+    if ! mount --bind "$bind_source" "$bind_target" 2>/tmp/mountfix_mount.err; then
+        local err
+        err=$(tr '\n' ' ' </tmp/mountfix_mount.err | sed 's/"/\\"/g')
+        printf '{"success":false,"error":"mount --bind failed: %s"}\n' "$err"
+        return 1
+    fi
+
+    if ! is_app_bind_mounted "$target_volume" "$app_name"; then
+        umount -l "$bind_target" 2>/dev/null
+        echo '{"success":false,"error":"Mount completed but inode check failed; rolled back"}'
+        return 1
+    fi
+
+    printf '{"success":true,"message":"Mounted","bindSource":"%s","bindTarget":"%s"}\n' \
+        "$bind_source" "$bind_target"
+    return 0
+}
+
+####################################################################
+# Unmount bind from ADM plugin path
+# Usage: unmount_app <targetVolume> <appName> [force=0|1]
+# force=1: after wait, fuser -k then umount -l (for shutdown)
+####################################################################
+unmount_app() {
+    local target_volume="$1"
+    local app_name="$2"
+    local force="${3:-0}"
+    local bind_source bind_target
+    local max_wait=20
+
+    if ! validate_target_volume "$target_volume"; then
+        echo '{"success":false,"error":"Invalid target volume"}'
+        return 1
+    fi
+    if ! validate_app_name "$app_name"; then
+        echo '{"success":false,"error":"Invalid app name"}'
+        return 1
+    fi
+
+    bind_source=$(get_app_data_path "$target_volume" "$app_name")
+    bind_target=$(get_app_plugin_path "$app_name")
+
+    if ! is_app_bind_mounted "$target_volume" "$app_name"; then
+        # Not our bind — treat as success (idempotent) unless something else is mounted there
+        if mount | grep -Fq " on ${bind_target} "; then
+            printf '{"success":false,"error":"Path mounted but not by MountFix bind: %s"}\n' "$bind_target"
+            return 1
+        fi
+        printf '{"success":true,"message":"Already unmounted","bindSource":"%s","bindTarget":"%s"}\n' \
+            "$bind_source" "$bind_target"
+        return 0
+    fi
+
+    while [ "$max_wait" -gt 0 ]; do
+        if ! fuser -m "$bind_target" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 2
+        max_wait=$((max_wait - 2))
+    done
+
+    if fuser -m "$bind_target" >/dev/null 2>&1; then
+        if [ "$force" = "1" ]; then
+            fuser -k -m "$bind_target" >/dev/null 2>&1
+            sleep 1
+        else
+            printf '{"success":false,"error":"Path busy (processes still using %s); stop the app or pass force=1"}\n' \
+                "$bind_target"
+            return 1
         fi
     fi
 
-    # If we reach this point, it means the target exists but is not a mount of the expected source
-    echo "null"
+    sync
+    if ! umount -l "$bind_target" 2>/tmp/mountfix_umount.err; then
+        local err
+        err=$(tr '\n' ' ' </tmp/mountfix_umount.err | sed 's/"/\\"/g')
+        printf '{"success":false,"error":"umount failed: %s"}\n' "$err"
+        return 1
+    fi
+
+    if is_app_bind_mounted "$target_volume" "$app_name"; then
+        echo '{"success":false,"error":"Unmount reported ok but inode check still shows mounted"}'
+        return 1
+    fi
+
+    printf '{"success":true,"message":"Unmounted","bindSource":"%s","bindTarget":"%s"}\n' \
+        "$bind_source" "$bind_target"
+    return 0
 }
 
 STATUS_FILE="/tmp/mountfix_transfer.status"
