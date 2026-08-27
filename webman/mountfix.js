@@ -221,11 +221,11 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         this.bindMountAction('mount', 'Mounting...', 'Mounted successfully');
     },
 
-    unmountSelectedApp: function (force) {
-        this.bindMountAction('unmount', 'Unmounting...', 'Unmounted successfully', force ? 1 : 0);
+    unmountSelectedApp: function () {
+        this.bindMountAction('unmount', 'Unmounting...', 'Unmounted successfully');
     },
 
-    bindMountAction: function (act, actionMsg, okMsg, force) {
+    bindMountAction: function (act, actionMsg, okMsg) {
         var page = this;
         var target = page.getSelectedVolume();
         var app = page.selectedApp && page.selectedApp.get('name');
@@ -235,14 +235,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             return;
         }
 
-        var params = { act: act, target: target, app: app };
-        if (act === 'unmount') {
-            params.force = force ? 1 : 0;
-        }
-
         page.maskWindow(actionMsg);
         AS.ARC.ajax({
-            url: AS.ARC.util.getApiUrlWithSid(page.mountApiUrl, params),
+            url: AS.ARC.util.getApiUrlWithSid(page.mountApiUrl, { act: act, target: target, app: app }),
             method: 'GET',
             success: function (json) {
                 page.unmaskWindow(actionMsg);
@@ -541,7 +536,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     text: 'Unmount',
                                     itemId: 'btnUnmount',
                                     handler: function () {
-                                        fn.unmountSelectedApp(false);
+                                        fn.unmountSelectedApp();
                                     },
                                 },
                                 {
