@@ -2,79 +2,90 @@
 
 # 1. Load the common functions:
 # - get_mount_configs() to read the config and build the MOUNTS variable
-. /volume1/.@plugins/AppCentral/MountFix/CONTROL/common.sh
-
-# reduce tendency to use SWAP to minimum
-sysctl -w vm.swappiness=1
-# force the system to keep file and folder information in RAM
-sysctl -w vm.vfs_cache_pressure=10
-# prolong the time after which "dirty" data is written to disk (to 60s)
-sysctl -w vm.dirty_writeback_centisecs=6000
-sysctl -w vm.dirty_expire_centisecs=6000
-
-# get the mount points form config
-MOUNTS=$(get_mount_configs)
-
-# Optional: Check if we actually got anything
-if [ $? -ne 0 ]; then
-    echo "Failed to load configuration from common.sh" >&2
-    exit 1 #or handle error
+if [ -f "/volume1/.@plugins/AppCentral/MountFix/CONTROL/common.sh" ]; then
+    . /volume1/.@plugins/AppCentral/MountFix/CONTROL/common.sh
+elif [ -f "$(dirname "$0")/common.sh" ]; then
+    . "$(dirname "$0")/common.sh"
 fi
 
-# echo "$MOUNTS" # For debugging: print the mount points we got from config
+# reduce tendency to use SWAP to minimum
+sysctl -w vm.swappiness=1 2>/dev/null || true
+# force the system to keep file and folder information in RAM
+sysctl -w vm.vfs_cache_pressure=10 2>/dev/null || true
+# prolong the time after which "dirty" data is written to disk (to 60s)
+sysctl -w vm.dirty_writeback_centisecs=6000 2>/dev/null || true
+sysctl -w vm.dirty_expire_centisecs=6000 2>/dev/null || true
+
+# get the mount points from config
+MOUNTS=$(get_mount_configs)
+if [ $? -ne 0 ]; then
+    echo "Failed to load configuration from common.sh" >&2
+    exit 1
+fi
+
+is_mounted() {
+    local src="$1"
+    local tgt="$2"
+    [ -d "$src" ] && [ -d "$tgt" ] || return 1
+    local s_ino t_ino
+    s_ino=$(stat -c %d:%i "$src" 2>/dev/null) || return 1
+    t_ino=$(stat -c %d:%i "$tgt" 2>/dev/null) || return 1
+    [ "$s_ino" = "$t_ino" ]
+}
 
 # Function to perform the mount/umount action
 do_action() {
     ACTION=$1
-    # for ENTRY in $MOUNTS; do
-    #     # Split the entry into source and target using colon as delimiter
-    #     SRC=$(echo "$ENTRY" | cut -d':' -f1)
-    #     TGT=$(echo "$ENTRY" | cut -d':' -f2)
+    echo "$MOUNTS" | while IFS=':' read -r SRC TGT; do
+        [ -z "$SRC" ] || [ -z "$TGT" ] && continue
 
-    #     case "$ACTION" in
-    #         start)
-    #             # Ensure source exists and target is not already mounted
-    #             if [ -d "$SRC" ] && [ -d "$TGT" ]; then
-    #                 if ! mount | grep -q "on $TGT type"; then
-    #                     mount --bind "$SRC" "$TGT"
-    #                     echo "Mounted: $SRC -> $TGT"
-    #                 else
-    #                     echo "Already mounted: $TGT"
-    #                 fi
-    #             else
-    #                 echo "Error: Directory missing - SRC: $SRC or TGT: $TGT"
-    #             fi
-    #             ;;
-    #         stop)
-    #             echo "[$(date)] Checking if services are still active..."
+        case "$ACTION" in
+            start)
+                if [ -d "$SRC" ] && [ -d "$TGT" ]; then
+                    if is_mounted "$SRC" "$TGT"; then
+                        echo "Already mounted: $SRC -> $TGT"
+                    else
+                        mount --bind "$SRC" "$TGT"
+                        if is_mounted "$SRC" "$TGT"; then
+                            echo "Successfully mounted: $SRC -> $TGT"
+                        else
+                            echo "Error: mount --bind failed for $TGT" >&2
+                        fi
+                    fi
+                else
+                    echo "Error: Directory missing - SRC: $SRC or TGT: $TGT" >&2
+                fi
+                ;;
+            stop)
+                echo "[$(date)] Checking if services are using $TGT..."
 
-    #             # 1. Give some grace period (e.g., 20 seconds and countdown)
-    #             # to allow K35 (Docker) to finish its own sleep 10 and cleanup.
-    #             MAX_WAIT=20
-    #             while [ $MAX_WAIT -gt 0 ]; do
-    #                 # Check if any process is still using our mount points
-    #                 if ! fuser -m "$TGT" > /dev/null 2>&1; then
-    #                     # Nobody is using it! We can safely unmount.
-    #                     break
-    #                 fi
-    #                 echo "Waiting for processes to release $TGT... ($MAX_WAIT s left)"
-    #                 sleep 2
-    #                 MAX_WAIT=$((MAX_WAIT - 2))
-    #             done
+                # 1. Grace period (max 20 seconds) for apps to finish closing
+                MAX_WAIT=20
+                while [ $MAX_WAIT -gt 0 ]; do
+                    if ! fuser -m "$TGT" >/dev/null 2>&1; then
+                        break
+                    fi
+                    echo "Waiting for processes to release $TGT... ($MAX_WAIT s left)"
+                    sleep 2
+                    MAX_WAIT=$((MAX_WAIT - 2))
+                done
 
-    #             # 2. If after <>20s they are still running, THEN we get aggressive
-    #             if [ $MAX_WAIT -le 0 ]; then
-    #                 echo "Timeout reached! Forcesing cleanup to save the filesystem."
-    #                 fuser -k -m "$TGT" > /dev/null 2>&1
-    #                 sleep 1
-    #             fi
+                # 2. If after 20s processes are still active, terminate them to release mount
+                if [ $MAX_WAIT -le 0 ]; then
+                    echo "Timeout reached for $TGT. Terminating remaining processes..."
+                    fuser -k -m "$TGT" >/dev/null 2>&1 || true
+                    sleep 1
+                fi
 
-    #             # 3. Clean unmount
-    #             sync
-    #             umount -l "$TGT"
-    #             ;;
-    #     esac
-    # done
+                # 3. Clean unmount
+                sync
+                if is_mounted "$SRC" "$TGT"; then
+                    umount -l "$TGT" 2>/dev/null || true
+                    echo "Unmounted: $TGT"
+                fi
+                ;;
+        esac
+    done
 }
 
 case "$1" in
@@ -94,6 +105,7 @@ case "$1" in
     *)
         echo "Usage: $0 {start|stop|restart}"
         exit 1
+        ;;
 esac
 
 exit 0

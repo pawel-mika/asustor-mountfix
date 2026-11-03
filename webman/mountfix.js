@@ -25,7 +25,6 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         var btnMount = this.win.down('#btnMount');
         var btnUnmount = this.win.down('#btnUnmount');
         var btnSyncBack = this.win.down('#btnSyncBack');
-        var btnBackupTarget = this.win.down('#btnBackupTarget');
         if (!btnCopyToTarget) return;
 
         if (this.selectedApp) {
@@ -38,14 +37,12 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             btnMount.setDisabled(running || !existsInTarget || mounted);
             btnUnmount.setDisabled(!mounted);
             btnSyncBack.setDisabled(running || !existsInTarget || mounted);
-            btnBackupTarget.setDisabled(!existsInTarget);
         } else {
             btnCopyToTarget.setText('Copy to target');
             btnCopyToTarget.disable();
             btnMount.disable();
             btnUnmount.disable();
             btnSyncBack.disable();
-            btnBackupTarget.disable();
         }
     },
 
@@ -196,23 +193,85 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         return values;
     },
 
-    migrateSelectedApp: function () {
+    migrateSelectedApp: function (force) {
         var page = this;
         var actionMsg = 'Copying application...';
         var target = page.getSelectedVolume();
-        var app = page.selectedApp.data.name;
+        var app = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
+
+        if (!target || !app) {
+            page.updateStatus('Error: Select volume and application first', true);
+            return;
+        }
+
+        var params = { act: 'migrate', target: target, app: app };
+        if (force) {
+            params.force = '1';
+        }
+
         page.maskWindow(actionMsg);
-        page.monitorMigrationStatus();
         AS.ARC.ajax({
-            url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'migrate', target, app }),
+            url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, params),
             params: Ext.encode(page.getMfConfig()),
             success: function (json) {
-                page.updateStatus('Copying started successfully', false);
-                page.unmaskWindow(actionMsg);
+                var res = json.result || {};
+                if (res.target_exists && !force) {
+                    page.unmaskWindow(actionMsg);
+                    Ext.Msg.confirm(
+                        'Target Directory Exists',
+                        'Folder docelowy dla ' + app + ' na woluminie ' + target + ' już zawiera dane.<br><br>Czy na pewno chcesz kontynuować kopiowanie? (Użyty zostanie bezpieczny tryb aktualizacji rsync -au, pomijający pliki nowsze na SSD).',
+                        function (btn) {
+                            if (btn === 'yes') {
+                                page.migrateSelectedApp(true);
+                            }
+                        }
+                    );
+                    return;
+                }
+                if (json.success && (res.success || res.success === undefined)) {
+                    page.updateStatus('Copying started successfully', false);
+                    page.monitorMigrationStatus();
+                } else {
+                    page.unmaskWindow(actionMsg);
+                    page.updateStatus('Error: ' + (res.error || json.error || 'Failed to start copying'), true);
+                }
             },
-            failure: function (json) {
+            failure: function () {
                 page.updateStatus('Error: Unable to start copying', true);
                 page.unmaskWindow(actionMsg);
+            },
+        });
+    },
+
+    syncBackSelectedApp: function (callbackOnComplete) {
+        var page = this;
+        var target = page.getSelectedVolume();
+        var app = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
+
+        if (!target || !app) {
+            page.updateStatus('Error: Select volume and application first', true);
+            return;
+        }
+
+        var actionMsg = 'Syncing back ' + app + '...';
+        page.maskWindow(actionMsg);
+
+        AS.ARC.ajax({
+            url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'sync_back', target: target, app: app }),
+            method: 'GET',
+            success: function (json) {
+                var res = json.result || {};
+                if (json.success && (res.success || res.success === undefined)) {
+                    page.updateStatus('Sync back started successfully', false);
+                    page.monitorMigrationStatus(callbackOnComplete);
+                } else {
+                    page.unmaskWindow(actionMsg);
+                    page.updateStatus('Error: ' + (res.error || json.error || 'Failed to start sync back'), true);
+                }
+            },
+            failure: function () {
+                page.unmaskWindow(actionMsg);
+                page.updateStatus('Error: Unable to start sync back', true);
             },
         });
     },
@@ -222,13 +281,38 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
     },
 
     unmountSelectedApp: function () {
-        this.bindMountAction('unmount', 'Unmounting...', 'Unmounted successfully');
+        var page = this;
+        var app = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
+        if (!app) {
+            page.updateStatus('Error: Select an application to unmount', true);
+            return;
+        }
+
+        Ext.Msg.show({
+            title: 'Odmontowanie ' + app,
+            msg: 'Aplikacja <b>' + app + '</b> zostanie odmontowana z woluminu SSD.<br><br>Czy chcesz najpierw wykonać <b>Sync-back</b> (zaktualizować dysk źródłowy danymi z SSD)?',
+            buttons: Ext.Msg.YESNOCANCEL,
+            buttonText: {
+                yes: 'Sync-back i Odmontuj',
+                no: 'Tylko odmontuj',
+                cancel: 'Anuluj',
+            },
+            fn: function (btn) {
+                if (btn === 'yes') {
+                    page.syncBackSelectedApp(function () {
+                        page.bindMountAction('unmount', 'Unmounting...', 'Unmounted successfully');
+                    });
+                } else if (btn === 'no') {
+                    page.bindMountAction('unmount', 'Unmounting...', 'Unmounted successfully');
+                }
+            },
+        });
     },
 
     bindMountAction: function (act, actionMsg, okMsg) {
         var page = this;
         var target = page.getSelectedVolume();
-        var app = page.selectedApp && page.selectedApp.get('name');
+        var app = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
 
         if (!target || !app) {
             page.updateStatus('Error: Select volume and application first', true);
@@ -256,9 +340,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         });
     },
 
-    monitorMigrationStatus: function () {
+    monitorMigrationStatus: function (callbackOnComplete) {
         var page = this;
-        var actionMsg = 'Monitoring migration status...';
+        var actionMsg = 'Monitoring transfer status...';
         page.maskWindow(actionMsg);
 
         var intervalId = setInterval(function () {
@@ -267,22 +351,26 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 method: 'GET',
                 success: function (json) {
                     const { app, progress } = json.result || {};
-                    const finished = progress == 100 && app === page.selectedApp.data.name;
+                    const currentAppName = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
+                    const finished = progress == 100 && app === currentAppName;
                     if (json.success) {
-                        page.updateStatus('Migrating: ' + app + ' - ' + progress + '%', false);
+                        page.updateStatus('Transfer: ' + app + ' - ' + progress + '%', false);
                         if (finished) {
                             clearInterval(intervalId);
                             page.unmaskWindow(actionMsg);
                             page.validate();
+                            if (typeof callbackOnComplete === 'function') {
+                                callbackOnComplete();
+                            }
                         }
                     } else {
-                        page.updateStatus('Error: ' + json.message, true);
+                        page.updateStatus('Error: ' + (json.message || 'Transfer failed'), true);
                         clearInterval(intervalId);
                         page.unmaskWindow(actionMsg);
                     }
                 },
                 failure: function () {
-                    page.updateStatus('Error: Unable to check migration status', true);
+                    page.updateStatus('Error: Unable to check transfer status', true);
                     clearInterval(intervalId);
                     page.unmaskWindow(actionMsg);
                 },
@@ -544,20 +632,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     text: 'Sync back',
                                     itemId: 'btnSyncBack',
                                     handler: function () {
-                                        // only enable when unmounted
-                                        // sync back should call backend to copy back data from the mounted volume/folder to the original location,
-                                        // this is needed when user wants to revert the changes but has some data written to the mounted volume that they want to keep.
-                                        // After successful sync back user can uncheck the "Fix" checkbox and click Apply to unmount the volume and revert changes
-                                        // it could also be done periodically on each app change to keep data in sync, but for now let's keep it manual to avoid unnecessary writes and potential performance impact.
-                                        console.log('sync back');
-                                    },
-                                },
-                                {
-                                    xtype: 'button',
-                                    text: 'Backup target',
-                                    itemId: 'btnBackupTarget',
-                                    handler: function () {
-                                        console.log('backup target');
+                                        fn.syncBackSelectedApp();
                                     },
                                 },
                             ],

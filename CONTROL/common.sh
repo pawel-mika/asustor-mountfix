@@ -4,21 +4,20 @@
 # In POSIX sh, we cannot return an array. 
 # This function prints the results to stdout, one per line.
 get_mount_configs() {
-    # Use standard local if available (BusyBox sh supports it)
-    local CONFIG_FILE="/usr/local/AppCentral/MountFix/etc/mountfix.conf"
+    # Allow overriding CONFIG_FILE for tests/runtime flexibility
+    local CFG="${CONFIG_FILE:-/usr/local/AppCentral/MountFix/etc/mountfix.conf}"
     local JSON_DATA
     local TARGET_VOL
 
     # Validate file existence
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo "Error: Configuration file not found at $CONFIG_FILE" >&2
+    if [ ! -f "$CFG" ]; then
+        echo "Error: Configuration file not found at $CFG" >&2
         return 1
     fi
 
     # Read and parse JSON
-    # Note: We assume 'jq' is available in the system PATH
-    JSON_DATA=$(cat "$CONFIG_FILE")
-    TARGET_VOL=$(echo "$JSON_DATA" | jq -r '.targetVolume')
+    JSON_DATA=$(cat "$CFG")
+    TARGET_VOL=$(echo "$JSON_DATA" | jq -r '.targetVolume // empty')
 
     # Check if targetVolume is valid
     if [ -z "$TARGET_VOL" ] || [ "$TARGET_VOL" = "null" ]; then
@@ -26,7 +25,8 @@ get_mount_configs() {
         return 1
     fi
 
-    # Output formatted strings directly to stdout
+    # Output formatted strings:
+    # Accept if .enabled == true OR if .enabled is missing/null (since selectedApps contains chosen items)
     echo "$JSON_DATA" | jq -r --arg vol "$TARGET_VOL" \
-        '.selectedApps[] | select(.enabled == true) | "\($vol)/AppCentral/\(.name):/volume1/.@plugins/AppCentral/\(.name)"'
+        '.selectedApps[]? | select(.enabled == true or .enabled == null) | "\($vol)/AppCentral/\(.name):/volume1/.@plugins/AppCentral/\(.name)"'
 }

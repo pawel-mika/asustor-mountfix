@@ -4,9 +4,13 @@ source ./buildJs.sh
 
 set -e # stop on error
 
-if [ "$EUID" -ne 0 ]; then
-    echo "Re-running script with sudo..."
-    exec sudo "$0" "$@"
+OUT_FOLDER="${OUT_FOLDER:-./out}"
+
+if [ -d "$OUT_FOLDER" ] && [ ! -w "$OUT_FOLDER" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        echo "Re-running script with sudo for write permissions to $OUT_FOLDER..."
+        exec sudo "$0" "$@"
+    fi
 fi
 
 # 0. Update version in CONTROL/config.json
@@ -30,8 +34,6 @@ if [ -f "$CONFIG_FILE" ]; then
 else
     echo "File not found: $CONFIG_FILE"
 fi
-
-OUT_FOLDER="./out"
 
 # 1. Create temp folder
 TEMP_FOLDER=$(mktemp -d)

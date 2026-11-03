@@ -2,10 +2,14 @@
 
 export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/opt/bin:/opt/sbin
 
-readonly DIR_VOL1="/volume1"
-readonly DIR_PLUGINS=".@plugins"
-readonly DIR_APP_CENTRAL="AppCentral"
-readonly DIR_MF_PLUGINS=".@mfplugins"
+DIR_VOL1="${DIR_VOL1:-/volume1}"
+readonly DIR_VOL1
+DIR_PLUGINS="${DIR_PLUGINS:-.@plugins}"
+readonly DIR_PLUGINS
+DIR_APP_CENTRAL="${DIR_APP_CENTRAL:-AppCentral}"
+readonly DIR_APP_CENTRAL
+DIR_MF_PLUGINS="${DIR_MF_PLUGINS:-.@mfplugins}"
+readonly DIR_MF_PLUGINS
 
 ####################################################################
 # Function to get size in human readable format
@@ -271,7 +275,7 @@ get_app_plugin_path() {
 get_app_data_path() {
     local target_volume="$1"
     local app_name="$2"
-    echo "$target_volume/$DIR_APP_CENTRAL/$app_name"
+    echo "${VOLUME_ROOT:-}$target_volume/$DIR_APP_CENTRAL/$app_name"
 }
 
 validate_app_name() {
@@ -395,30 +399,56 @@ unmount_app() {
 STATUS_FILE="/tmp/mountfix_transfer.status"
 
 ####################################################################
-# Function to start background rsync for selected APP
+# Function to start background rsync for selected APP (SRC -> DST)
 ####################################################################
 start_app_transfer() {
     local target_volume="$1"
     local app_name="$2"
+    local force="$3"
+
+    if ! validate_target_volume "$target_volume"; then
+        echo '{"success": false, "error": "Invalid target volume"}'
+        return 1
+    fi
+    if ! validate_app_name "$app_name"; then
+        echo '{"success": false, "error": "Invalid app name"}'
+        return 1
+    fi
+
+    # CRITICAL: If app is mounted, reject transfer!
+    if is_app_bind_mounted "$target_volume" "$app_name"; then
+        echo '{"success": false, "error": "Cannot copy while application is mounted. Unmount it first!"}'
+        return 1
+    fi
 
     local pipe="/tmp/rsync_progress.pipe"
     local src_vol=$DIR_VOL1
     local src="$src_vol/$DIR_PLUGINS/$DIR_APP_CENTRAL/$app_name"
-    local tgt="$target_volume/$DIR_APP_CENTRAL"
+    local tgt="${VOLUME_ROOT:-}$target_volume/$DIR_APP_CENTRAL"
+    local tgt_app="$tgt/$app_name"
+
+    # Safety check: if target directory already exists and contains files, and force is not "1"
+    if [ "$force" != "1" ] && [ -d "$tgt_app" ] && [ "$(ls -A "$tgt_app" 2>/dev/null)" ]; then
+        echo '{"success": false, "target_exists": true, "error": "Target directory already contains data. Confirmation required."}'
+        return 1
+    fi
 
     # prevent starting multiple transfers for the same app at the same time, which could cause conflicts and data corruption
     if pgrep -f "rsync.*$app_name" > /dev/null; then
         echo '{"success": false, "error": "Transfer already in progress"}'
-        return
+        return 1
     fi
 
     echo "$app_name" > "$STATUS_FILE"
     echo "0% | Starting transfer..." >> "$STATUS_FILE"
 
     (
+        rm -f "$pipe"
         mkfifo "$pipe"
-        rsync -a --info=progress2 "$src" "$tgt" >> "$pipe" 2>&1 &
-        cat "$pipe" | tr '\r' '\n' >> $STATUS_FILE
+        # -au: archive + update (never overwrite newer destination files)
+        rsync -au --info=progress2 "$src" "$tgt" >> "$pipe" 2>&1 &
+        cat "$pipe" | tr '\r' '\n' >> "$STATUS_FILE"
+        rm -f "$pipe"
 
         echo "$app_name" > "$STATUS_FILE"
         if [ $? -eq 0 ]; then
@@ -429,6 +459,69 @@ start_app_transfer() {
     ) & 
 
     echo '{"success": true, "message": "Transfer started in background", "src": "'$src'", "tgt": "'$tgt'"}'
+}
+
+####################################################################
+# Function to sync data BACK from target (SSD) to source (HDD)
+# PREREQUISITE: App must NOT be mounted!
+####################################################################
+start_app_sync_back() {
+    local target_volume="$1"
+    local app_name="$2"
+
+    if ! validate_target_volume "$target_volume"; then
+        echo '{"success": false, "error": "Invalid target volume"}'
+        return 1
+    fi
+    if ! validate_app_name "$app_name"; then
+        echo '{"success": false, "error": "Invalid app name"}'
+        return 1
+    fi
+
+    # CRITICAL: App must NOT be mounted!
+    if is_app_bind_mounted "$target_volume" "$app_name"; then
+        echo '{"success": false, "error": "Cannot sync back while application is mounted. Unmount it first!"}'
+        return 1
+    fi
+
+    local pipe="/tmp/rsync_syncback_progress.pipe"
+    local src="${VOLUME_ROOT:-}$target_volume/$DIR_APP_CENTRAL/$app_name"
+    local tgt="$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL/$app_name"
+
+    if [ ! -d "$src" ]; then
+        echo '{"success": false, "error": "Target data directory does not exist on SSD"}'
+        return 1
+    fi
+
+    if [ ! -d "$tgt" ]; then
+        mkdir -p "$tgt"
+    fi
+
+    if pgrep -f "rsync.*$app_name" > /dev/null; then
+        echo '{"success": false, "error": "Transfer already in progress"}'
+        return 1
+    fi
+
+    echo "$app_name" > "$STATUS_FILE"
+    echo "0% | Starting sync back..." >> "$STATUS_FILE"
+
+    (
+        rm -f "$pipe"
+        mkfifo "$pipe"
+        # Sync back from SSD ($src/) to HDD ($tgt/) with -au (archive + update, no --delete)
+        rsync -au --info=progress2 "$src/" "$tgt/" >> "$pipe" 2>&1 &
+        cat "$pipe" | tr '\r' '\n' >> "$STATUS_FILE"
+        rm -f "$pipe"
+
+        echo "$app_name" > "$STATUS_FILE"
+        if [ $? -eq 0 ]; then
+            echo "100% | Completed" >> "$STATUS_FILE"
+        else
+            echo "ERROR | Sync back failed" >> "$STATUS_FILE"
+        fi
+    ) &
+
+    echo '{"success": true, "message": "Sync back started in background", "src": "'$src'", "tgt": "'$tgt'"}'
 }
 
 ####################################################################
