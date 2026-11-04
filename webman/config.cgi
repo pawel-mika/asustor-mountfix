@@ -18,8 +18,11 @@ if [ "$ACTION" = "get" ]; then
     CURRENT_CONFIG=$(load_mountfix_config)
 
     # 4. Read installed package version from config.json
-    APP_VERSION=$(grep -oE '"version": "[^"]+"' /usr/local/AppCentral/MountFix/CONTROL/config.json 2>/dev/null | head -n 1 | cut -d'"' -f4)
-    [ -z "$APP_VERSION" ] && APP_VERSION="0.0.0.92"
+    CONF_FILE="$(dirname "$0")/../CONTROL/config.json"
+    [ ! -f "$CONF_FILE" ] && CONF_FILE="/usr/local/AppCentral/MountFix/CONTROL/config.json"
+    [ ! -f "$CONF_FILE" ] && CONF_FILE="/volume1/.@plugins/AppCentral/MountFix/CONTROL/config.json"
+    APP_VERSION=$(grep -oE '"version": "[^"]+"' "$CONF_FILE" 2>/dev/null | head -n 1 | cut -d'"' -f4)
+    [ -z "$APP_VERSION" ] && APP_VERSION="0.0.0.95"
 
     # 5. Assembling everything into one JSON
     # We use variables to inject dynamic lists into the object

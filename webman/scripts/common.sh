@@ -447,14 +447,17 @@ start_app_transfer() {
         mkfifo "$pipe"
         # -au: archive + update (never overwrite newer destination files)
         rsync -au --info=progress2 "$src" "$tgt" >> "$pipe" 2>&1 &
+        rsync_pid=$!
         cat "$pipe" | tr '\r' '\n' >> "$STATUS_FILE"
+        wait "$rsync_pid"
+        rsync_status=$?
         rm -f "$pipe"
 
         echo "$app_name" > "$STATUS_FILE"
-        if [ $? -eq 0 ]; then
+        if [ "$rsync_status" -eq 0 ]; then
             echo "100% | Completed" >> "$STATUS_FILE"
         else
-            echo "ERROR | Transfer failed" >> "$STATUS_FILE"
+            echo "ERROR | Transfer failed (exit code: $rsync_status)" >> "$STATUS_FILE"
         fi
     ) & 
 
@@ -510,14 +513,17 @@ start_app_sync_back() {
         mkfifo "$pipe"
         # Sync back from SSD ($src/) to HDD ($tgt/) with -au (archive + update, no --delete)
         rsync -au --info=progress2 "$src/" "$tgt/" >> "$pipe" 2>&1 &
+        rsync_pid=$!
         cat "$pipe" | tr '\r' '\n' >> "$STATUS_FILE"
+        wait "$rsync_pid"
+        rsync_status=$?
         rm -f "$pipe"
 
         echo "$app_name" > "$STATUS_FILE"
-        if [ $? -eq 0 ]; then
+        if [ "$rsync_status" -eq 0 ]; then
             echo "100% | Completed" >> "$STATUS_FILE"
         else
-            echo "ERROR | Sync back failed" >> "$STATUS_FILE"
+            echo "ERROR | Sync back failed (exit code: $rsync_status)" >> "$STATUS_FILE"
         fi
     ) &
 
@@ -536,8 +542,9 @@ get_transfer_status_json() {
     local first_line=$(head -n 1 "$STATUS_FILE")
     local last_line=$(tail -n 1 "$STATUS_FILE")
 
-    local percent=$(echo "$last_line" | grep -oE '[0-9]+%' | tr -d '%')
+    local percent=$(echo "$last_line" | grep -oE '[0-9]+%' | tr -d '%' | tail -n 1)
     [ -z "$percent" ] && percent=0
 
-    printf '{"app": "%s", "progress": %s, "lastLine": "%s"}\n' "$first_line" "$percent" "$last_line"
+    local safe_last_line=$(echo "$last_line" | sed 's/"/\\"/g')
+    printf '{"app": "%s", "progress": %s, "lastLine": "%s"}\n' "$first_line" "$percent" "$safe_last_line"
 }

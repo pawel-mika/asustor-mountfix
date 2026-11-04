@@ -3,3 +3,6 @@
 out/
 .DS_Store
 */.DS_Store
+*.bak*
+tests/*.bak*
+GEMINI.md

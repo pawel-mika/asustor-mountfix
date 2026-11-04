@@ -235,8 +235,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                     return;
                 }
                 if (json.success && (res.success || res.success === undefined)) {
-                    page.updateStatus('Copying started successfully', false);
-                    page.monitorMigrationStatus();
+                    page.unmaskWindow(actionMsg);
+                    page.updateStatus('Rozpoczęto kopiowanie ' + app, false);
+                    page.monitorMigrationStatus('Kopiowanie ' + app);
                 } else {
                     page.unmaskWindow(actionMsg);
                     page.updateStatus('Error: ' + (res.error || json.error || 'Failed to start copying'), true);
@@ -268,8 +269,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             success: function (json) {
                 var res = json.result || {};
                 if (json.success && (res.success || res.success === undefined)) {
-                    page.updateStatus('Sync back started successfully', false);
-                    page.monitorMigrationStatus(callbackOnComplete);
+                    page.unmaskWindow(actionMsg);
+                    page.updateStatus('Rozpoczęto sync-back dla ' + app, false);
+                    page.monitorMigrationStatus('Sync-back ' + app, callbackOnComplete);
                 } else {
                     page.unmaskWindow(actionMsg);
                     page.updateStatus('Error: ' + (res.error || json.error || 'Failed to start sync back'), true);
@@ -319,22 +321,22 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                             height: 40,
                             margin: '0 16 0 0',
                             html: '<div style="width:36px;height:36px;border-radius:50%;background:#e6f4ff;border:1px solid #91caff;display:flex;align-items:center;justify-content:center;">' +
-                                  '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1677ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-                                  '<circle cx="12" cy="12" r="10"></circle>' +
-                                  '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>' +
-                                  '<line x1="12" y1="17" x2="12.01" y2="17"></line>' +
-                                  '</svg></div>'
+                                '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1677ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                                '<circle cx="12" cy="12" r="10"></circle>' +
+                                '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>' +
+                                '<line x1="12" y1="17" x2="12.01" y2="17"></line>' +
+                                '</svg></div>'
                         },
                         {
                             xtype: 'container',
                             flex: 1,
                             html: '<div style="font-size: 13px; font-weight: bold; color: #1f1f1f; margin-bottom: 6px;">' +
-                                  'Czy chcesz wykonać Sync-back przed odmontowaniem?' +
-                                  '</div>' +
-                                  '<div style="font-size: 12px; color: #555; line-height: 18px;">' +
-                                  'Aplikacja <b>' + Ext.String.htmlEncode(app) + '</b> zostanie odmontowana z woluminu SSD.<br><br>' +
-                                  '<span style="color: #0958d9; font-weight: 500;">Zalecane:</span> Wykonaj <b>Sync-back</b>, aby przenieść najnowsze dane z SSD z powrotem na dysk źródłowy (HDD).' +
-                                  '</div>'
+                                'Czy chcesz wykonać Sync-back przed odmontowaniem?' +
+                                '</div>' +
+                                '<div style="font-size: 12px; color: #555; line-height: 18px;">' +
+                                'Aplikacja <b>' + Ext.String.htmlEncode(app) + '</b> zostanie odmontowana z woluminu SSD.<br><br>' +
+                                '<span style="color: #0958d9; font-weight: 500;">Zalecane:</span> Wykonaj <b>Sync-back</b>, aby przenieść najnowsze dane z SSD z powrotem na dysk źródłowy (HDD).' +
+                                '</div>'
                         }
                     ]
                 }
@@ -403,48 +405,82 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         });
     },
 
-    monitorMigrationStatus: function (callbackOnComplete) {
+    monitorMigrationStatus: function (actionLabel, callbackOnComplete) {
         var page = this;
-        var actionMsg = 'Monitoring transfer status...';
-        page.maskWindow(actionMsg);
+        if (typeof actionLabel === 'function') {
+            callbackOnComplete = actionLabel;
+            actionLabel = null;
+        }
+
+        var app = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
+        var baseLabel = actionLabel || (app ? ('Operacja ' + app) : 'Transfer');
+        var initialMask = baseLabel + '...';
+        page.maskWindow(initialMask);
 
         var intervalId = setInterval(function () {
             AS.ARC.ajax({
                 url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'status' }),
                 method: 'GET',
                 success: function (json) {
-                    const { app, progress } = json.result || {};
-                    const currentAppName = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
-                    const finished = progress == 100 && app === currentAppName;
-                    if (json.success) {
-                        page.updateStatus('Transfer: ' + app + ' - ' + progress + '%', false);
+                    var result = (json && json.result) || {};
+                    var appName = result.app;
+                    var progress = parseInt(result.progress, 10) || 0;
+                    var lastLine = result.lastLine || '';
+                    var currentAppName = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
+
+                    // Check for failure indicated in status file
+                    if (lastLine.indexOf('ERROR') !== -1) {
+                        clearInterval(intervalId);
+                        page.unmaskAll();
+                        page.updateStatus('Błąd: ' + lastLine, true);
+                        return;
+                    }
+
+                    if (json && json.success) {
+                        var statusMsg = (actionLabel || (appName ? ('Transfer ' + appName) : 'Transfer')) + ': ' + progress + '%';
+                        page.updateStatus(statusMsg, false);
+                        if (page.win && page.win.el) {
+                            page.win.el.mask(statusMsg);
+                        }
+
+                        var finished = (progress >= 100 || lastLine.indexOf('Completed') !== -1) && (!currentAppName || appName === currentAppName);
                         if (finished) {
                             clearInterval(intervalId);
-                            page.unmaskWindow(actionMsg);
+                            page.unmaskAll();
+                            page.updateStatus((actionLabel || 'Operacja') + ' zakończona pomyślnie', false);
                             page.validate();
                             if (typeof callbackOnComplete === 'function') {
                                 callbackOnComplete();
                             }
                         }
                     } else {
-                        page.updateStatus('Error: ' + (json.message || 'Transfer failed'), true);
                         clearInterval(intervalId);
-                        page.unmaskWindow(actionMsg);
+                        page.unmaskAll();
+                        page.updateStatus('Error: ' + ((json && (json.message || json.error)) || 'Transfer failed'), true);
                     }
                 },
                 failure: function () {
-                    page.updateStatus('Error: Unable to check transfer status', true);
                     clearInterval(intervalId);
-                    page.unmaskWindow(actionMsg);
+                    page.unmaskAll();
+                    page.updateStatus('Error: Unable to check transfer status', true);
                 },
             });
         }, 500);
     },
 
+    unmaskAll: function () {
+        this.maskStack = [];
+        if (this.win && this.win.el) {
+            this.win.el.unmask();
+        }
+    },
+
     maskWindow: function (message) {
         message = message || 'Working...';
         this.maskStack.push(message);
-        this.win && this.win.el && this.win.el.mask(this.maskStack[this.maskStack.length - 1]);
+        if (this.win && this.win.el) {
+            this.win.el.mask(this.maskStack[this.maskStack.length - 1]);
+        }
     },
 
     unmaskWindow: function (message) {
@@ -455,9 +491,13 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         }
 
         if (this.maskStack.length > 0) {
-            this.win && this.win.el && this.win.el.mask(this.maskStack[this.maskStack.length - 1]);
+            if (this.win && this.win.el) {
+                this.win.el.mask(this.maskStack[this.maskStack.length - 1]);
+            }
         } else {
-            this.win && this.win.el && this.win.el.unmask();
+            if (this.win && this.win.el) {
+                this.win.el.unmask();
+            }
         }
     },
 

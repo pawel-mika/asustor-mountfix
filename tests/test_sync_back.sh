@@ -47,4 +47,31 @@ echo "$RES_SYNC_INV" | grep -q '"success": false' || {
     exit 1
 }
 
+# Test 3: Status file parsing with get_transfer_status_json
+echo "testapp" > "$STATUS_FILE"
+echo " 1,234,567  45%   10.5MB/s   0:00:01" >> "$STATUS_FILE"
+STATUS_JSON=$(get_transfer_status_json)
+echo "$STATUS_JSON" | grep -q '"progress": 45' || {
+    echo "FAIL: Expected progress 45, got: $STATUS_JSON"
+    exit 1
+}
+
+echo "testapp" > "$STATUS_FILE"
+echo "100% | Completed" >> "$STATUS_FILE"
+STATUS_DONE=$(get_transfer_status_json)
+echo "$STATUS_DONE" | grep -q '"progress": 100' || {
+    echo "FAIL: Expected progress 100, got: $STATUS_DONE"
+    exit 1
+}
+
+# Test 4: JS UI mask safety checks
+grep -q 'unmaskAll' webman/mf_actions.js || {
+    echo "FAIL: unmaskAll missing from mf_actions.js"
+    exit 1
+}
+grep -q 'btnUnmount.setDisabled(running || !mounted)' webman/mf_actions.js || {
+    echo "FAIL: Unmount button must be disabled when app is running"
+    exit 1
+}
+
 echo "PASS: Sync-back and transfer guard tests passed."
