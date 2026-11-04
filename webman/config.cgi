@@ -17,12 +17,17 @@ if [ "$ACTION" = "get" ]; then
     # 3. Reading the current config (if it doesn't exist, create empty)
     CURRENT_CONFIG=$(load_mountfix_config)
 
-    # 4. Assembling everything into one JSON
+    # 4. Read installed package version from config.json
+    APP_VERSION=$(grep -oE '"version": "[^"]+"' /usr/local/AppCentral/MountFix/CONTROL/config.json 2>/dev/null | head -n 1 | cut -d'"' -f4)
+    [ -z "$APP_VERSION" ] && APP_VERSION="0.0.0.92"
+
+    # 5. Assembling everything into one JSON
     # We use variables to inject dynamic lists into the object
     RESPONSE_DATA=$(cat <<EOF
         "config": $CURRENT_CONFIG,
         "apps": $APPS_JSON,
-        "volumes": [$VOLUMES]
+        "volumes": [$VOLUMES],
+        "version": "$APP_VERSION"
 EOF
 )
 

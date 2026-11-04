@@ -31,6 +31,19 @@ if [ -f "$CONFIG_FILE" ]; then
 
     # write back new version to config
     jq ".general.version = \"$NEW_VERSION\"" "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+
+    # update version in webman/mf_core.js and sync local mountfix.js
+    if [ -f "webman/mf_core.js" ]; then
+        python3 -c "
+import re
+with open('webman/mf_core.js', 'r') as f:
+    c = f.read()
+c = re.sub(r\"(fieldLabel:\s*'Version',\s*value:\s*')[^']+'\", r\"\g<1>$NEW_VERSION'\", c)
+with open('webman/mf_core.js', 'w') as f:
+    f.write(c)
+"
+        build_js . false >/dev/null 2>&1
+    fi
 else
     echo "File not found: $CONFIG_FILE"
 fi

@@ -177,6 +177,12 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 combo.setValue(newConfig.config.targetVolume);
             }
         }
+        if (newConfig.version) {
+            var verField = page.win.down('#displayVersion');
+            if (verField) {
+                verField.setValue(newConfig.version);
+            }
+        }
     },
 
     getMfConfig: function () {
@@ -639,8 +645,9 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                         },
                         {
                             xtype: 'displayfield',
+                            itemId: 'displayVersion',
                             fieldLabel: 'Version',
-                            value: '0.0.0.74',
+                            value: '0.0.0.92',
                         },
                     ],
                 },
