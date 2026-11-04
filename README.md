@@ -59,7 +59,10 @@ This way, your applications will be faster, and the main volume will be less loa
 
 # Mechanism Description for Developers
 
-At the current development stage (version 0.0.0.62), MountFix is a partially implemented APKG package for ASUSTOR ADM. The project uses the ADM plugin architecture to integrate with the NAS system.
+For an in-depth technical breakdown of IPC, background transfer execution, polling mechanisms, and safety guardrails, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+At the current development stage, MountFix uses the ADM plugin architecture to integrate with the NAS system.
+
 
 ## System Architecture
 - **APKG Package**: Consists of CONTROL/ (metadata, installation scripts), webman/ (web interface), etc/ (configuration).
