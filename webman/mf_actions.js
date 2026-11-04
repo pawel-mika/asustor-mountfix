@@ -32,10 +32,10 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             const running = !!this.selectedApp.get('enabled');
             const existsInTarget = !!this.selectedApp.get('existsInTarget');
             btnCopyToTarget.setText('Copy to target: ' + this.selectedApp.get('name'));
-            // Copy/Mount/Sync need stopped app; Unmount needs selection even when running
+            // All actions (Copy, Mount, Unmount, Sync) require the app to be stopped to prevent filesystem conflicts
             btnCopyToTarget.setDisabled(running || mounted);
             btnMount.setDisabled(running || !existsInTarget || mounted);
-            btnUnmount.setDisabled(!mounted);
+            btnUnmount.setDisabled(running || !mounted);
             btnSyncBack.setDisabled(running || !existsInTarget || mounted);
         } else {
             btnCopyToTarget.setText('Copy to target');
@@ -294,25 +294,82 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             return;
         }
 
-        Ext.Msg.show({
-            title: 'Odmontowanie ' + app,
-            msg: 'Aplikacja <b>' + app + '</b> zostanie odmontowana z woluminu SSD.<br><br>Czy chcesz najpierw wykonać <b>Sync-back</b> (zaktualizować dysk źródłowy danymi z SSD)?',
-            buttons: Ext.Msg.YESNOCANCEL,
-            buttonText: {
-                yes: 'Sync-back i Odmontuj',
-                no: 'Tylko odmontuj',
-                cancel: 'Anuluj',
-            },
-            fn: function (btn) {
-                if (btn === 'yes') {
-                    page.syncBackSelectedApp(function () {
-                        page.bindMountAction('unmount', 'Unmounting...', 'Unmounted successfully');
-                    });
-                } else if (btn === 'no') {
-                    page.bindMountAction('unmount', 'Unmounting...', 'Unmounted successfully');
+        var running = !!(page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('enabled') : page.selectedApp.data.enabled));
+        if (running) {
+            page.updateStatus('Aplikacja ' + app + ' jest uruchomiona. Zatrzymaj ją w AppCentral przed odmontowaniem.', true);
+            return;
+        }
+
+        var dlg = Ext.create('Ext.window.Window', {
+            title: 'Odmontowanie: ' + app,
+            width: 480,
+            modal: true,
+            resizable: false,
+            draggable: true,
+            closable: true,
+            bodyPadding: '18 20 16 20',
+            items: [
+                {
+                    xtype: 'container',
+                    layout: 'hbox',
+                    items: [
+                        {
+                            xtype: 'component',
+                            width: 40,
+                            height: 40,
+                            margin: '0 16 0 0',
+                            html: '<div style="width:36px;height:36px;border-radius:50%;background:#e6f4ff;border:1px solid #91caff;display:flex;align-items:center;justify-content:center;">' +
+                                  '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1677ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                                  '<circle cx="12" cy="12" r="10"></circle>' +
+                                  '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>' +
+                                  '<line x1="12" y1="17" x2="12.01" y2="17"></line>' +
+                                  '</svg></div>'
+                        },
+                        {
+                            xtype: 'container',
+                            flex: 1,
+                            html: '<div style="font-size: 13px; font-weight: bold; color: #1f1f1f; margin-bottom: 6px;">' +
+                                  'Czy chcesz wykonać Sync-back przed odmontowaniem?' +
+                                  '</div>' +
+                                  '<div style="font-size: 12px; color: #555; line-height: 18px;">' +
+                                  'Aplikacja <b>' + Ext.String.htmlEncode(app) + '</b> zostanie odmontowana z woluminu SSD.<br><br>' +
+                                  '<span style="color: #0958d9; font-weight: 500;">Zalecane:</span> Wykonaj <b>Sync-back</b>, aby przenieść najnowsze dane z SSD z powrotem na dysk źródłowy (HDD).' +
+                                  '</div>'
+                        }
+                    ]
                 }
-            },
+            ],
+            fbar: [
+                {
+                    xtype: 'button',
+                    text: 'Sync-back i Odmontuj',
+                    style: 'font-weight: bold; border-color: #1677ff; color: #1677ff;',
+                    handler: function () {
+                        dlg.close();
+                        page.syncBackSelectedApp(function () {
+                            page.bindMountAction('unmount', 'Unmounting...', 'Unmounted successfully');
+                        });
+                    }
+                },
+                {
+                    xtype: 'button',
+                    text: 'Tylko odmontuj',
+                    handler: function () {
+                        dlg.close();
+                        page.bindMountAction('unmount', 'Unmounting...', 'Unmounted successfully');
+                    }
+                },
+                {
+                    xtype: 'button',
+                    text: 'Anuluj',
+                    handler: function () {
+                        dlg.close();
+                    }
+                }
+            ]
         });
+
+        dlg.show();
     },
 
     bindMountAction: function (act, actionMsg, okMsg) {
