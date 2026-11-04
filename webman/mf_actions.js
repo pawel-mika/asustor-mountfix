@@ -223,21 +223,59 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 var res = json.result || {};
                 if (res.target_exists && !force) {
                     page.unmaskWindow(actionMsg);
-                    Ext.Msg.confirm(
-                        'Target Directory Exists',
-                        'Folder docelowy dla ' + app + ' na woluminie ' + target + ' już zawiera dane.<br><br>Czy na pewno chcesz kontynuować kopiowanie? (Użyty zostanie bezpieczny tryb aktualizacji rsync -au, pomijający pliki nowsze na SSD).',
-                        function (btn) {
-                            if (btn === 'yes') {
-                                page.migrateSelectedApp(true);
+                    if (Ext.ClassManager && Ext.ClassManager.isCreated('AS.ARC.msgWindow')) {
+                        var confirmDlg = Ext.create('AS.ARC.msgWindow', {
+                            parentWin: page.win,
+                            title: 'Target Directory Exists',
+                            width: 500,
+                            height: 220,
+                            iconType: 'warning',
+                            asItems: [
+                                {
+                                    xtype: 'displayfield',
+                                    value: '<div style="font-size: 13px; font-weight: bold; margin-bottom: 8px;">' +
+                                        'Target folder already contains data' +
+                                        '</div>' +
+                                        '<div style="font-size: 12px; line-height: 18px;">' +
+                                        'Target directory for <b>' + Ext.String.htmlEncode(app) + '</b> on volume <b>' + Ext.String.htmlEncode(target) + '</b> already contains data.<br><br>' +
+                                        'Are you sure you want to continue copying? (Safe update mode <code>rsync -au</code> will be used, preserving newer files on SSD).' +
+                                        '</div>'
+                                }
+                            ],
+                            fbar: [
+                                {
+                                    text: 'Continue',
+                                    handler: function () {
+                                        confirmDlg.close();
+                                        page.migrateSelectedApp(true);
+                                    }
+                                },
+                                {
+                                    text: 'Cancel',
+                                    handler: function () {
+                                        confirmDlg.close();
+                                    }
+                                }
+                            ]
+                        });
+                        confirmDlg.show();
+                    } else {
+                        Ext.Msg.confirm(
+                            'Target Directory Exists',
+                            'Target directory for ' + Ext.String.htmlEncode(app) + ' on volume ' + Ext.String.htmlEncode(target) + ' already contains data.<br><br>Are you sure you want to continue copying? (Safe update mode rsync -au will be used, preserving newer files on SSD).',
+                            function (btn) {
+                                if (btn === 'yes') {
+                                    page.migrateSelectedApp(true);
+                                }
                             }
-                        }
-                    );
+                        );
+                    }
                     return;
                 }
                 if (json.success && (res.success || res.success === undefined)) {
                     page.unmaskWindow(actionMsg);
-                    page.updateStatus('Rozpoczęto kopiowanie ' + app, false);
-                    page.monitorMigrationStatus('Kopiowanie ' + app);
+                    page.updateStatus('Started copying ' + app, false);
+                    page.monitorMigrationStatus('Copying ' + app);
                 } else {
                     page.unmaskWindow(actionMsg);
                     page.updateStatus('Error: ' + (res.error || json.error || 'Failed to start copying'), true);
@@ -270,7 +308,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 var res = json.result || {};
                 if (json.success && (res.success || res.success === undefined)) {
                     page.unmaskWindow(actionMsg);
-                    page.updateStatus('Rozpoczęto sync-back dla ' + app, false);
+                    page.updateStatus('Started sync-back for ' + app, false);
                     page.monitorMigrationStatus('Sync-back ' + app, callbackOnComplete);
                 } else {
                     page.unmaskWindow(actionMsg);
@@ -285,7 +323,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
     },
 
     mountSelectedApp: function () {
-        this.bindMountAction('mount', 'Mounting...', 'Mounted successfully');
+        var app = this.selectedApp && (this.selectedApp.get ? this.selectedApp.get('name') : this.selectedApp.data.name);
+        var label = app ? (' ' + app) : '';
+        this.bindMountAction('mount', 'Mounting' + label + '...', 'Mounted' + label + ' successfully');
     },
 
     unmountSelectedApp: function () {
@@ -298,83 +338,86 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
         var running = !!(page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('enabled') : page.selectedApp.data.enabled));
         if (running) {
-            page.updateStatus('Aplikacja ' + app + ' jest uruchomiona. Zatrzymaj ją w AppCentral przed odmontowaniem.', true);
+            page.updateStatus('Application ' + app + ' is currently running. Stop it in AppCentral before unmounting.', true);
             return;
         }
 
-        var dlg = Ext.create('Ext.window.Window', {
-            title: 'Odmontowanie: ' + app,
-            width: 480,
-            modal: true,
-            resizable: false,
-            draggable: true,
-            closable: true,
-            bodyPadding: '18 20 16 20',
-            items: [
-                {
-                    xtype: 'container',
-                    layout: 'hbox',
-                    items: [
-                        {
-                            xtype: 'component',
-                            width: 40,
-                            height: 40,
-                            margin: '0 16 0 0',
-                            html: '<div style="width:36px;height:36px;border-radius:50%;background:#e6f4ff;border:1px solid #91caff;display:flex;align-items:center;justify-content:center;">' +
-                                '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1677ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-                                '<circle cx="12" cy="12" r="10"></circle>' +
-                                '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>' +
-                                '<line x1="12" y1="17" x2="12.01" y2="17"></line>' +
-                                '</svg></div>'
-                        },
-                        {
-                            xtype: 'container',
-                            flex: 1,
-                            html: '<div style="font-size: 13px; font-weight: bold; color: #1f1f1f; margin-bottom: 6px;">' +
-                                'Czy chcesz wykonać Sync-back przed odmontowaniem?' +
-                                '</div>' +
-                                '<div style="font-size: 12px; color: #555; line-height: 18px;">' +
-                                'Aplikacja <b>' + Ext.String.htmlEncode(app) + '</b> zostanie odmontowana z woluminu SSD.<br><br>' +
-                                '<span style="color: #0958d9; font-weight: 500;">Zalecane:</span> Wykonaj <b>Sync-back</b>, aby przenieść najnowsze dane z SSD z powrotem na dysk źródłowy (HDD).' +
-                                '</div>'
-                        }
-                    ]
-                }
-            ],
-            fbar: [
-                {
-                    xtype: 'button',
-                    text: 'Sync-back i Odmontuj',
-                    style: 'font-weight: bold; border-color: #1677ff; color: #1677ff;',
-                    handler: function () {
-                        dlg.close();
-                        page.syncBackSelectedApp(function () {
-                            page.bindMountAction('unmount', 'Unmounting...', 'Unmounted successfully');
-                        });
-                    }
-                },
-                {
-                    xtype: 'button',
-                    text: 'Tylko odmontuj',
-                    handler: function () {
-                        dlg.close();
-                        page.bindMountAction('unmount', 'Unmounting...', 'Unmounted successfully');
-                    }
-                },
-                {
-                    xtype: 'button',
-                    text: 'Anuluj',
-                    handler: function () {
-                        dlg.close();
-                    }
-                }
-            ]
-        });
+        var onUnmountWithSyncBack = function () {
+            // Unmount first, and only on successful unmount trigger sync-back
+            page.bindMountAction('unmount', 'Unmounting ' + app + '...', 'Unmounted ' + app + ' successfully', function () {
+                page.syncBackSelectedApp();
+            });
+        };
 
-        dlg.show();
+        var onUnmountOnly = function () {
+            page.bindMountAction('unmount', 'Unmounting ' + app + '...', 'Unmounted ' + app + ' successfully');
+        };
+
+        if (Ext.ClassManager && Ext.ClassManager.isCreated('AS.ARC.msgWindow')) {
+            var dlg = Ext.create('AS.ARC.msgWindow', {
+                parentWin: page.win,
+                title: 'Unmount: ' + app,
+                width: 500,
+                height: 220,
+                iconType: 'question',
+                asItems: [
+                    {
+                        xtype: 'displayfield',
+                        value: '<div style="font-size: 13px; font-weight: bold; margin-bottom: 8px;">' +
+                            'Unmount and Sync-back to source volume?' +
+                            '</div>' +
+                            '<div style="font-size: 12px; line-height: 18px;">' +
+                            'Application <b>' + Ext.String.htmlEncode(app) + '</b> will be unmounted from the target volume.<br><br>' +
+                            '<b>Recommendation:</b> Unmount first, then perform Sync-back to copy latest data from SSD back to source disk (HDD).' +
+                            '</div>'
+                    }
+                ],
+                fbar: [
+                    {
+                        text: 'Unmount & Sync-back',
+                        handler: function () {
+                            dlg.close();
+                            onUnmountWithSyncBack();
+                        }
+                    },
+                    {
+                        text: 'Unmount only',
+                        handler: function () {
+                            dlg.close();
+                            onUnmountOnly();
+                        }
+                    },
+                    {
+                        text: 'Cancel',
+                        handler: function () {
+                            dlg.close();
+                        }
+                    }
+                ]
+            });
+            dlg.show();
+        } else {
+            Ext.Msg.show({
+                title: 'Unmount: ' + app,
+                msg: 'Application <b>' + Ext.String.htmlEncode(app) + '</b> will be unmounted from the target volume.<br><br>Do you want to perform Sync-back after unmounting?',
+                buttons: Ext.Msg.YESNOCANCEL,
+                buttonText: {
+                    yes: 'Unmount & Sync-back',
+                    no: 'Unmount only',
+                    cancel: 'Cancel',
+                },
+                fn: function (btn) {
+                    if (btn === 'yes') {
+                        onUnmountWithSyncBack();
+                    } else if (btn === 'no') {
+                        onUnmountOnly();
+                    }
+                }
+            });
+        }
     },
 
-    bindMountAction: function (act, actionMsg, okMsg) {
+    bindMountAction: function (act, actionMsg, okMsg, onSuccessCallback) {
         var page = this;
         var target = page.getSelectedVolume();
         var app = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
@@ -394,6 +437,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                     page.updateStatus(json.message || okMsg, false);
                     page.validate();
                     page.updateActionsUI();
+                    if (typeof onSuccessCallback === 'function') {
+                        onSuccessCallback();
+                    }
                 } else {
                     page.updateStatus('Error: ' + ((json && json.error) || 'Operation failed'), true);
                 }
@@ -413,7 +459,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         }
 
         var app = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
-        var baseLabel = actionLabel || (app ? ('Operacja ' + app) : 'Transfer');
+        var baseLabel = actionLabel || (app ? ('Operation ' + app) : 'Transfer');
         var initialMask = baseLabel + '...';
         page.maskWindow(initialMask);
 
@@ -432,7 +478,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                     if (lastLine.indexOf('ERROR') !== -1) {
                         clearInterval(intervalId);
                         page.unmaskAll();
-                        page.updateStatus('Błąd: ' + lastLine, true);
+                        page.updateStatus('Error: ' + lastLine, true);
                         return;
                     }
 
@@ -447,7 +493,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                         if (finished) {
                             clearInterval(intervalId);
                             page.unmaskAll();
-                            page.updateStatus((actionLabel || 'Operacja') + ' zakończona pomyślnie', false);
+                            page.updateStatus((actionLabel || 'Operation') + ' completed successfully', false);
                             page.validate();
                             if (typeof callbackOnComplete === 'function') {
                                 callbackOnComplete();

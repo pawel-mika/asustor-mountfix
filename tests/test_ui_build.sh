@@ -8,7 +8,10 @@ set -e
 grep -q "syncBackSelectedApp" webman/mountfix.js || { echo "FAIL: syncBackSelectedApp missing from mountfix.js"; exit 1; }
 
 # Check if unmount prompt with sync-back exists
-grep -q "Sync-back i Odmontuj" webman/mountfix.js || { echo "FAIL: Sync-back i Odmontuj button missing from mountfix.js"; exit 1; }
+grep -q "Unmount & Sync-back" webman/mountfix.js || { echo "FAIL: Unmount & Sync-back button missing from mountfix.js"; exit 1; }
+
+# Check that native ADM msgWindow is used for consistent modal styling
+grep -q "AS.ARC.msgWindow" webman/mountfix.js || { echo "FAIL: AS.ARC.msgWindow missing from mountfix.js"; exit 1; }
 
 # Check that unmount is blocked when app is running
 grep -q "btnUnmount.setDisabled(running || !mounted)" webman/mountfix.js || { echo "FAIL: unmount button must be disabled when running"; exit 1; }
