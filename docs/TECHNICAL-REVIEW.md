@@ -339,3 +339,131 @@ After F1+F2 are merged and a package is built, the user should install it on the
 - UI guards (button enable/disable by state, confirmation before overwriting target data, unmount → sync-back flow).
 - Correct stop ordering reasoning (`tests/test_start_stop.sh` documents ADM's `sort -r` for `K*` scripts).
 - Good documentation baseline (`docs/ARCHITECTURE.md`, `IDEAS.md`).
+
+---
+
+## 6. Second-Pass Verification & Addendum
+
+| | |
+|---|---|
+| **Date** | 2026-11-23 |
+| **Reviewed revision** | branch `feature/mountfix-safety-sync`, commit `0854b46` |
+| **Reviewer** | **Antigravity** — model **Gemini 4 Neon (High)** (agentic audit / verification mode) |
+| **Scope** | Fact-check of sections 1–5 against the actual repository + audit for missed bugs and caveats in proposed fixes |
+
+### 6.1 Fact-check of the original review (F1–F11)
+
+All findings `F1`–`F11` are **verified and accurate** — there are no hallucinated issues, and the severity / implementation order is sound.
+
+Minor corrections to references in sections 0–5:
+
+- Line-number offsets in `webman/mf_core.js` (~44 lines off):
+  - F3: "Mount" checkcolumn is at `mf_core.js:114-119` (not `:158`).
+  - F9: `console.log('copy to target')` is at `mf_core.js:192` (not `:237`).
+  - F10: `value: '0.0.0.102'` is at `mf_core.js:225` (not `:270`).
+- Section 0 item 5 ("no bashisms"): existing scripts in `CONTROL/` and `webman/` already use `local` (supported by BusyBox `ash` and `dash`, though technically outside strict POSIX `sh`).
+
+---
+
+### 6.2 Additional findings missed in the original review
+
+#### F12 🔴 `migrate.cgi` blocks until `rsync` finishes (background subshell leaks CGI stdout/stderr)
+
+**Where:** `webman/scripts/common.sh:445-462` (`start_app_transfer`), `:511-528` (`start_app_sync_back`), `webman/migrate.cgi:29,32`
+
+**Problem**
+
+- `migrate.cgi` invokes `RESPONSE=$(start_app_transfer ...)` and `RESPONSE=$(start_app_sync_back ...)`.
+- Inside both functions, the background subshell `( ... ) &` inherits the open stdout/stderr descriptors of the command substitution `$(...)` and of the CGI process (`lighttpd`) without redirecting them (`</dev/null >/dev/null 2>&1`).
+- As a result, `$(...)` **blocks until the entire `rsync` job finishes** (verified with `sh`). The HTTP request hangs for the full transfer duration (risking browser/lighttpd timeouts on large apps like `docker-ce`), and the frontend 500 ms polling loop (`monitorMigrationStatus`) only starts *after* the transfer has already completed.
+- Additionally, `cat "$pipe" | tr '\r' '\n' >> "$STATUS_FILE"` block-buffers stdout (typically 4–8 KB when not attached to a tty), so progress updates stall at `0%` on small/medium transfers until the buffer flushes or `rsync` exits.
+
+**Proposed fix**
+
+- Redirect all standard FDs on the background subshell: `( ... ) </dev/null >/dev/null 2>&1 &` (and ideally detach with `nohup` or `setsid` if available).
+- Avoid block-buffered `tr` for progress updates (e.g. `stdbuf -oL tr` if available, or an `awk` / shell `IFS` loop / `rsync --outbuf=L` where supported).
+
+**Acceptance criteria** Calling `RESPONSE=$(start_app_transfer ...)` with a slow mock `rsync` (e.g. `sleep 3`) returns in `< 0.5 s` while the background transfer continues and updates the status file incrementally.
+
+---
+
+#### F13 🔴 NVMe volumes are misclassified as HDDs and blocked in the UI; `df -h` can wrap lines
+
+**Where:** `webman/scripts/common.sh:190` (`get_volume_rotational`), `:211` (`get_volumes_json`)
+
+**Problem**
+
+- `base_disk=$(echo "$first_slave" | sed 's/[0-9]*$//')` works for SATA partitions (`sdd4` → `sdd`), but turns NVMe partitions (`nvme0n1p1`, `nvme1n1p4`) into `nvme0n1p` instead of `nvme0n1`.
+- Neither `/sys/block/nvme0n1p/queue/rotational` nor `/sys/block/nvme0n1p1/queue/rotational` exists, so `get_volume_rotational` falls back to `1` (HDD). Because `mf_core.js:70` blocks selecting non-SSD volumes (`beforeselect: return record.get('isSSD')`), **NVMe volumes cannot be selected at all**.
+- In `get_volumes_json`, `df -h "$VOL" | awk 'NR==2'` omits `-P` (POSIX single-line output). For long device names (e.g. `/dev/mapper/...`), `df` wraps onto two lines, shifting `TOTAL`, `FREE`, and `USE_PCT` to wrong/empty values.
+
+**Proposed fix**
+
+- Resolve the base block device cleanly for both SATA and NVMe (e.g. strip `p[0-9]+$` for `nvme*`/`mmcblk*` and `[0-9]+$` for `sd*`/`hd*`/`vd*`, or read `/sys/class/block/$first_slave/../queue/rotational` via `readlink -f`).
+- Use `df -Ph "$VOL" | awk 'NR==2'` (verify `-P` works on ADM's BusyBox `df`; otherwise `df -h "$VOL" | awk 'NR>1 { ... }'`).
+
+**Acceptance criteria** Unit test covering `sdd4` → `sdd`, `nvme0n1p1` → `nvme0n1`, `nvme0n1` → `nvme0n1`, and long wrapped `df` output.
+
+---
+
+#### F14 🟠 No guard preventing relocation or unmount of `MountFix` itself
+
+**Where:** `webman/scripts/common.sh` (`get_installed_apps_json`, `mount_app`, `unmount_app`, `start_app_transfer`, `start_app_sync_back`), `webman/validate.cgi`
+
+**Problem** Neither the UI nor the backend excludes `MountFix` from the selectable/actionable app list. A user can attempt to copy, bind-mount, or unmount `MountFix` while its own CGI scripts are executing from `/volume1/.@plugins/AppCentral/MountFix`.
+
+**Proposed fix** Reject `MountFix` server-side in `validate_app_name` (or a dedicated `is_protected_app` guard in mount/unmount/transfer/config save) and hide/disable it in the UI. Also consider warning clearly when relocating `entware` (boot-time dependency, see F2).
+
+---
+
+#### F15 🟠 `CONTROL/pre-install.sh` invokes `opkg` without Entware on `PATH` and skips `rsync` check
+
+**Where:** `CONTROL/pre-install.sh:5-10`
+
+**Problem**
+
+- As verified in section 2, Entware binaries live in `/usr/local/AppCentral/entware/opt/bin` and are not on the default `PATH`. Calling `opkg update` / `opkg install` without extending `PATH` fails on systems where `/opt/bin` is missing.
+- `opkg install bash` is inside `if ! command -v jq`, so `bash` is skipped if `jq` is already installed.
+- `rsync` availability (and support for `--info=progress2`) is never checked during install.
+
+**Proposed fix** Export `PATH="$PATH:/usr/local/AppCentral/entware/opt/bin:/opt/bin:/opt/sbin"` in `pre-install.sh`, check required packages individually, and verify whether `rsync` is provided by ADM or needs installing via `opkg`.
+
+---
+
+#### F16 🟠 Double `validate()` on window open and race condition during "Unmount & Sync-back"
+
+**Where:** `webman/mf_actions.js:90-92`, `:436-442`; `webman/mf_core.js:72-74`
+
+**Problem**
+
+- On window open, `loadConfig()` calls `setMfConfig()` → `combo.setValue(...)`, which fires the combo `change` listener (`fn.validate()` #1), and two lines later `loadConfig()` explicitly calls `page.validate()` #2 — launching two concurrent full `du` scans across `/volume1`.
+- During "Unmount & Sync-back", `bindMountAction()` fires `page.validate()` and `onSuccessCallback()` (`syncBackSelectedApp()`) **in parallel**. `du` scans the HDD while `rsync` is actively writing to it, and when `validate()` finishes it mutates `maskStack` and overwrites the live transfer progress mask.
+
+**Proposed fix** Suppress/suspend the combo `change` event during `setMfConfig()` (`combo.suspendEvents(); combo.setValue(...); combo.resumeEvents();`). In `bindMountAction()`, do not run `validate()` in parallel with `onSuccessCallback` (either chain `syncBackSelectedApp` after unmount and let sync-back's completion run `validate(app)`, or await validation first).
+
+---
+
+#### F17 🟡 Minor missed defects (CGI, JS, shell hygiene)
+
+- `url_decode()` (`webman/scripts/common.sh:52-54`) only matches uppercase hex (`[0-9A-F]`, ignoring `%2f`) and uses non-POSIX `echo -e` (prints literal `-e` under `dash`). Use `printf '%b'` and `[0-9A-Fa-f]`.
+- `migrateSelectedApp()` (`webman/mf_actions.js:221`) sends `params: Ext.encode(page.getMfConfig())` as an unused POST body (copy-paste leftover from `saveConfig`); `migrate.cgi` only reads `QUERY_STRING`. Use `method: 'GET'` (or switch all mutating endpoints to POST per F5).
+- `webman/mf_core.js:278` still calls dead `fn.getApps()` on every window open, firing an unused HTTP request to `webman/apps.cgi` (which is also the only CGI using `#!/usr/bin/env sh` instead of `#!/bin/sh`).
+- Typo in `webman/mf_core.js:269`: `taskIcon: '..apps/MountFix/images/icon-app-task.png'` (missing `/` after `..`).
+- `readonly DIR_VOL1` etc. (`webman/scripts/common.sh:5-12`) cause errors if the library is sourced more than once in the same shell session (e.g. test harnesses).
+
+---
+
+### 6.3 Caveats & refinements for existing proposals (`F1`, `F2`, `F4`)
+
+- **F2 (`etc/mounts.list`) — Upgrade migration gap:** If an existing NAS upgrades from `0.0.0.102` (which only has `etc/mountfix.conf`) and reboots *before* anyone saves from the UI, `etc/mounts.list` will not exist yet and `start-stop.sh` will mount nothing. **`CONTROL/post-install.sh` (in the `upgrade` branch, when Entware is running) must generate `etc/mounts.list` from the restored `etc/mountfix.conf`**, and/or `start-stop.sh` should keep a fallback if `mounts.list` is absent.
+- **F1 (`pids_using_paths`) — Three operational details:**
+  1. Also include `"$p/exe"` in the `readlink` loop (in addition to `cwd`, `root`, `fd/*`).
+  2. Processes accessing a relocated app through an alternate bind mount (e.g. `/opt/...` for `entware`) may not show `$TGT` in `/proc/$pid/fd/*` — keeping non-lazy `umount` safely catches this via `EBUSY`.
+  3. Iterating `readlink` per FD for all processes on a NAS running Docker can take several seconds per pass under BusyBox `ash`, making `waited=$((waited + 2))` drift well past 10 s of wall-clock time; track wall-clock time (`date +%s`) or cap iterations conservatively.
+- **F4 (`rsync -aHAX --delete`) — Destination path & NAS capability check:**
+  1. Today `start_app_transfer` calls `rsync ... "$src" "$tgt"` where `$tgt` is `/volumeX/AppCentral` (parent dir), whereas `start_app_sync_back` uses `"$src/" "$tgt/"` (app dir). Before adding `--delete`, unify `start_app_transfer` to `mkdir -p "$tgt_app" && rsync ... --delete "$src/" "$tgt_app/"` so a trailing slash mistake can never wipe sibling apps in `/volumeX/AppCentral/`.
+  2. Test `rsync -aHAX --numeric-ids` directly on the target NAS first — if the underlying filesystem or Entware `rsync` build rejects ACLs (`-A`) or `trusted.*` xattrs (`-X`), `rsync` exits with code `23` and fails the transfer.
+
+---
+
+*Addendum authored by **Antigravity** (model: **Gemini 4 Neon (High)**, mode: **read-only technical verification & audit**) on 2026-11-23.*
