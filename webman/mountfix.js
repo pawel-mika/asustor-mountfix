@@ -790,7 +790,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                             xtype: 'displayfield',
                             itemId: 'displayVersion',
                             fieldLabel: 'Version',
-                            value: '0.0.0.102',
+                            value: '0.0.0.103',
                         },
                     ],
                 },
