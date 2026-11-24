@@ -467,3 +467,37 @@ Minor corrections to references in sections 0–5:
 ---
 
 *Addendum authored by **Antigravity** (model: **Gemini 4 Neon (High)**, mode: **read-only technical verification & audit**) on 2026-11-23.*
+
+---
+
+## 7. Field Verification & Shutdown Refinement (2026-11-24)
+
+### 7.1 Production Incident & Reboot Verification (`0.0.0.102` → `0.0.0.103`)
+
+During the ADM firmware upgrade (`5.1.4.RM62` → `5.1.5.RNN1`) on `0.0.0.102`, both **F2** and **F1** manifested in production:
+
+1. **Before `0.0.0.103` (F2 confirmed):** `K52entware` stopped before `K02MountFix` and removed `/opt/bin`. `K02MountFix stop` failed on missing `jq` and exited 1 without unmounting anything. `S21stormand stop` then hung for 60 s on busy cross-volume bind mounts (`/volume2` mounted inside `/volume1`) until ADM's `/etc/script/script_trap.sh` sent `SIGKILL` (`Forced stop 'stormand' service`). On boot, `S02MountFix start` applied `sysctl` and then exited 1 on missing `jq`, causing all 4 apps (`docker-ce`, `minidlna`, `download-center`, `entware`) to start from stale HDD copies on `/volume1`.
+2. **After `0.0.0.103` (boot fixed; remaining shutdown edge case found):**
+   - **Boot (`S02MountFix start`)** succeeded in `< 1 s` without `jq`; all configured apps mounted from `/volume2` and Docker started all containers cleanly.
+   - **Controlled reboot (`K02MountFix stop`)** cleanly unmounted `docker-ce`, `download-center`, and `minidlna`, and logged the exact 6 PIDs still holding `entware` (`17299 17454 17471 17473 17474 17501`).
+   - **Why `entware` stayed busy:** ADM stops AppCentral plugins (`rcK.pluginsfs`) **before** built-in services (`rcK.builtinfs`, including `sshd`). Active user SSH sessions running Entware `bash`/`tmux` keep `/volume2/AppCentral/entware/opt/...` open when `K02MountFix` runs. Because `0.0.0.103` skipped unmounting `entware`, `stormand` still hit `EBUSY` 90 s later.
+   - **Performance observation:** Scanning `/proc` via BusyBox `readlink` + `awk` took ~5 s per pass (2 passes per idle mount = ~31 s total for 4 mounts).
+
+### 7.2 Targeted Fixes (`0.0.0.104`, branch `fix/shutdown-fast-unmount`)
+
+1. **`umount`-first fast path in `CONTROL/start-stop.sh`:**
+   - Plain non-lazy `umount "$tgt"` is atomic in the Linux kernel: idle mounts unmount in `~0.01 s`, while busy mounts immediately return `EBUSY` with no side effects.
+   - Only run `pids_using_paths` when `umount` actually returns `EBUSY` (and avoid running it twice per iteration). Cuts typical `stop` time from ~31 s to ~1 s.
+2. **Shutdown-aware per-path cleanup (gated strictly on `/var/log/halt-action`):**
+   - ADM writes `REBOOT` or `SHUTDOWN` to `/var/log/halt-action` before running `rcK.raminitfs` → `rcK.builtinfs` → `rcK.pluginsfs`; during normal runtime (manual stop/disable/upgrade in AppCentral) the file is empty.
+   - **Normal runtime (`halt-action` empty):** Never send signals; skip busy mounts and log `pid(comm)` (e.g. `10180(tmux) 10189(bash)`).
+   - **Real `REBOOT`/`SHUTDOWN`:** If a mount is still `EBUSY` after the grace period, send `SIGTERM` (2 s) → `SIGKILL` (1 s) **only to the exact PIDs returned by `pids_using_paths`** (never `fuser -k -m`), then perform a clean non-lazy `umount` so `stormand` can cleanly unmount `/volume2` and `/volume1`.
+
+### 7.3 Design Note: Disabling MountFix While Apps Are Running
+
+- **Current safe behaviour:** Disabling or upgrading MountFix in AppCentral while relocated apps are running will **not** crash those apps — `stop` skips busy mounts and leaves them running on `/volume2`. (Disabling MountFix only prevents `S02MountFix` from running on the *next* boot.)
+- **Returning apps to HDD (`/volume1`):** The safe sequence is *Stop app → Unmount → Sync-back (SSD → HDD) → Start app*.
+- **Why auto-stop / auto-sync-back / auto-restart must NOT live in `start-stop.sh stop`:**
+  1. ADM invokes `stop` during every MountFix package upgrade — stopping Docker or running multi-GB `rsync` during an upgrade is undesirable.
+  2. ADM's `script_trap.sh` enforces a hard **60 s** timeout on `stop`, which would `SIGKILL` `rsync` mid-transfer.
+- **Future UI consideration (Stage 2):** If a one-click rollback is desired, implement it as an explicit UI workflow (e.g., *"Revert to HDD"* / per-app *Unmount & Sync-back* with optional restart prompt) running asynchronously outside init timeouts, paired with an active-mount guard in `CONTROL/pre-uninstall.sh` (F10).

@@ -13,6 +13,8 @@ LOG_FILE="${MOUNTFIX_LOG_FILE:-/usr/local/AppCentral/MountFix/var/mountfix.log}"
 ADM_SYSLOG_BIN="${ADM_SYSLOG_BIN:-/usr/sbin/syslog}"
 PROC_ROOT="${PROC_ROOT:-/proc}"
 PROC_MOUNTS="${PROC_MOUNTS:-/proc/mounts}"
+HALT_ACTION_FILE="${HALT_ACTION_FILE:-/var/log/halt-action}"
+KILL_BIN="${KILL_BIN:-kill}"
 STOP_MAX_SECONDS="${STOP_MAX_SECONDS:-12}"
 
 rotate_log() {
@@ -68,6 +70,13 @@ is_mounted() {
     awk -v tgt="$tgt" '$2 == tgt { found = 1; exit 0 } END { exit(found ? 0 : 1) }' "$PROC_MOUNTS" 2>/dev/null
 }
 
+is_system_shutdown() {
+    [ -f "$HALT_ACTION_FILE" ] || return 1
+    local action
+    action=$(tr -d ' \t\r\n' < "$HALT_ACTION_FILE" 2>/dev/null)
+    [ "$action" = "REBOOT" ] || [ "$action" = "SHUTDOWN" ]
+}
+
 # Print PIDs of processes using anything under any of the given path prefixes
 # (cwd, root, exe, open fds, mmapped files). Never signals or kills processes.
 pids_using_paths() {
@@ -105,6 +114,57 @@ pids_using_paths() {
         fi
         [ "$hit" -eq 1 ] && echo "$pid"
     done
+}
+
+format_pids() {
+    local pid comm out=""
+    for pid in $1; do
+        comm=$(tr -d '\r\n' < "$PROC_ROOT/$pid/comm" 2>/dev/null || true)
+        if [ -n "$comm" ]; then
+            out="${out:+$out }${pid}(${comm})"
+        else
+            out="${out:+$out }${pid}"
+        fi
+    done
+    printf '%s' "$out"
+}
+
+# Only invoked during a real ADM REBOOT/SHUTDOWN so lingering shells (e.g. tmux/bash
+# holding Entware) do not block stormand from cleanly unmounting /volume2 and /volume1.
+terminate_holders_for_shutdown() {
+    local tgt="$1"
+    local src="$2"
+    local busy="$3"
+    local pid desc
+
+    desc=$(format_pids "$busy")
+    log_warn "System shutdown in progress; sending SIGTERM to PID(s) holding $tgt: $desc"
+    for pid in $busy; do
+        "$KILL_BIN" -TERM "$pid" 2>/dev/null || true
+    done
+    sleep 2
+    if umount "$tgt" 2>/dev/null; then
+        log_msg "Unmounted after SIGTERM: $tgt"
+        return 0
+    fi
+
+    busy=$(pids_using_paths "$tgt" "$src")
+    if [ -n "$busy" ]; then
+        desc=$(format_pids "$busy")
+        log_warn "Sending SIGKILL to remaining PID(s) holding $tgt: $desc"
+        for pid in $busy; do
+            "$KILL_BIN" -KILL "$pid" 2>/dev/null || true
+        done
+        sleep 1
+    fi
+
+    if umount "$tgt" 2>/dev/null; then
+        log_msg "Unmounted after SIGKILL: $tgt"
+        return 0
+    fi
+
+    log_warn "Failed to unmount $tgt even after terminating holders, leaving mounted"
+    return 1
 }
 
 # Collect configured mounts plus any live AppCentral bind mounts from /proc/mounts,
@@ -163,13 +223,14 @@ do_start() {
 }
 
 do_stop() {
-    local entries deadline src tgt busy
+    local entries deadline src tgt busy desc
     entries=$(collect_stop_entries)
     if [ -z "$entries" ]; then
         log_msg "No mounts to stop."
         return 0
     fi
 
+    sync
     # Shared wall-clock budget keeps total stop time well under ADM's 60s script_trap limit
     deadline=$(( $(date +%s) + STOP_MAX_SECONDS ))
 
@@ -181,24 +242,44 @@ do_stop() {
             continue
         fi
 
-        while [ "$(date +%s)" -lt "$deadline" ]; do
-            busy=$(pids_using_paths "$tgt" "$src")
-            [ -z "$busy" ] && break
-            log_msg "Waiting for PID(s) [$(echo "$busy" | tr '\n' ' ')] to release $tgt..."
-            sleep 2
-        done
-
-        busy=$(pids_using_paths "$tgt" "$src")
-        if [ -n "$busy" ]; then
-            log_warn "Skipping unmount of $tgt: still in use by PID(s) $(echo "$busy" | tr '\n' ' ')"
+        # Fast path: plain non-lazy umount is atomic in the kernel (returns EBUSY immediately if in use)
+        if umount "$tgt" 2>/dev/null; then
+            log_msg "Unmounted: $tgt"
             continue
         fi
 
-        sync
-        if umount "$tgt" 2>/dev/null; then
-            log_msg "Unmounted: $tgt"
+        # Target is busy: identify holders and wait briefly within the shared budget
+        busy=$(pids_using_paths "$tgt" "$src")
+        while [ -n "$busy" ] && [ "$(date +%s)" -lt "$deadline" ]; do
+            desc=$(format_pids "$busy")
+            log_msg "Waiting for PID(s) [$desc] to release $tgt..."
+            sleep 2
+            if umount "$tgt" 2>/dev/null; then
+                log_msg "Unmounted: $tgt"
+                busy=""
+                break
+            fi
+            busy=$(pids_using_paths "$tgt" "$src")
+        done
+
+        if ! is_mounted "$src" "$tgt"; then
+            continue
+        fi
+
+        if [ -z "$busy" ]; then
+            if umount "$tgt" 2>/dev/null; then
+                log_msg "Unmounted: $tgt"
+            else
+                log_warn "Failed to unmount $tgt (busy or nested submounts), leaving mounted"
+            fi
+            continue
+        fi
+
+        if is_system_shutdown; then
+            terminate_holders_for_shutdown "$tgt" "$src" "$busy" || true
         else
-            log_warn "Failed to unmount $tgt (busy or nested submounts), leaving mounted"
+            desc=$(format_pids "$busy")
+            log_warn "Skipping unmount of $tgt: still in use by PID(s) $desc"
         fi
     done
 }
