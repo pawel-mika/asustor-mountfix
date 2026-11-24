@@ -71,7 +71,7 @@ At the current development stage, MountFix uses the ADM plugin architecture to i
 
 ## Application Migration & Boot Mechanism
 1. **Configuration**: `etc/mountfix.conf` stores the UI configuration (`targetVolume` and `selectedApps`), while `etc/mounts.list` provides a pre-validated, `jq`-free `SRC:TGT` list for boot/shutdown scripts (kept in sync on config save and package upgrades).
-2. **Application Detection**: `webman/scripts/common.sh` (`get_installed_apps_json()`) parses `/usr/builtin/etc/appcentral/installed.json` to list installed AppCentral packages.
+2. **Application Detection**: `webman/scripts/common.sh` (`get_installed_apps_json()`) parses `/usr/builtin/etc/appcentral/installed.json` to list installed AppCentral packages (excluding `MountFix`). Shared helpers live in `CONTROL/lib.sh`.
 3. **Validation**: `validate.cgi` checks source (`/volume1/.@plugins/AppCentral/APP`) and target (`TARGET/AppCentral/APP`) directory sizes and verifies active bind mounts via device/inode comparison (`stat -c %d:%i`).
 4. **Migration & Sync-Back**: `migrate.cgi` runs background `rsync` transfers between `/volume1` and the target SSD volume with FIFO progress reporting.
 5. **Mounting & Shutdown**: `CONTROL/start-stop.sh` (`S02MountFix` / `K02MountFix`) binds `TARGET/AppCentral/APP` onto `/volume1/.@plugins/AppCentral/APP` at boot, applies `sysctl` memory/VFS tuning on `start`, and safely unmounts in reverse order on `stop` (skipping busy apps during runtime upgrades and cleaning up lingering holders only on real ADM `REBOOT`/`SHUTDOWN`).
@@ -79,7 +79,9 @@ At the current development stage, MountFix uses the ADM plugin architecture to i
 7. **UI**: `mountfix.js` (ExtJS) provides target volume selection (SSD/HDD detection) and per-application copy, mount, unmount, and sync-back actions.
 
 ## CGI API
-- `apps.cgi?act=get`: Returns installed applications in JSON.
+All CGIs require a valid ADM **administrator** session (`sid` query parameter, verified through ADM's `admin.cgi`); otherwise they return `{"success": false, "error": "Unauthorized: ..."}`.
+
+- `apps.cgi?act=get`: Returns installed applications in JSON (`MountFix` itself is excluded).
 - `config.cgi?act=get`: Returns current configuration, apps, volumes, and package version.
 - `config.cgi?act=set`: Saves configuration from POST JSON and updates `etc/mounts.list`.
 - `validate.cgi?act=get&target=VOL[&app=NAME]`: Returns mount status and disk usage per app.

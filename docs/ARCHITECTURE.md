@@ -164,7 +164,7 @@ ADM registers `CONTROL/start-stop.sh` at boot/stop priority `2` (`/usr/local/etc
 
 Because `S02MountFix` starts before `S52entware` (and `K02MountFix` stops after `K52entware` removes `/opt/bin`), boot and shutdown scripts cannot depend on Entware's `jq`:
 - `etc/mountfix.conf` remains the JSON source of truth for the ExtJS UI.
-- `generate_mounts_list()` (in `CONTROL/common.sh`) validates `targetVolume` (`^/volume[0-9]+$`) and each selected package name, and atomically writes `etc/mounts.list` (`<targetVol>/AppCentral/<app>:/volume1/.@plugins/AppCentral/<app>`, one entry per line).
+- `generate_mounts_list()` (in `CONTROL/lib.sh`) validates `targetVolume` (`^/volume[0-9]+$`) and each selected package name, and atomically writes `etc/mounts.list` (`<targetVol>/AppCentral/<app>:/volume1/.@plugins/AppCentral/<app>`, one entry per line).
 - `etc/mounts.list` is regenerated automatically on every UI config save (`save_mountfix_config`) and during package `install`/`upgrade` (`CONTROL/post-install.sh`).
 - At boot/shutdown, `get_mount_configs()` reads `etc/mounts.list` using pure POSIX `sh` (`while IFS=: read -r src tgt`).
 
@@ -184,9 +184,21 @@ ADM enforces a 60-second per-script shutdown timeout (`/etc/script/script_trap.s
 - **Persistent Log:** Every `start`/`stop` action logs timestamped entries to `/usr/local/AppCentral/MountFix/var/mountfix.log` (automatically rotated when exceeding 500 lines).
 - **ADM System Event Log:** Warnings (such as skipped busy mounts or shutdown `SIGTERM` cleanup) are also emitted to ADM's system log via `/usr/sbin/syslog --log 0 --level 1 --user SYSTEM --event "[MountFix] ..."`.
 
+### 4.4 Shared Library (`CONTROL/lib.sh`)
+
+`CONTROL/lib.sh` is the single POSIX/BusyBox `ash` library sourced by `CONTROL/start-stop.sh`, `CONTROL/post-install.sh` and `webman/scripts/common.sh`. It holds path builders, validators (`validate_app_name`, `validate_target_volume`, `validate_mount_pair`, `is_protected_app` — `MountFix` can never be relocated), `is_mounted`, `is_app_bind_mounted`, `pids_using_paths`, `json_escape` and the `mounts.list` helpers. Paths are overridable by environment variables (`MF_ROOT`, `CONFIG_FILE`, `PROC_ROOT`, `DIR_VOL1`, …) so tests run against temp dirs. `CONTROL/common.sh` is a temporary compatibility shim (to be removed).
+
+### 4.5 CGI Security & Response Contract
+
+- ADM's `lighttpd` does **not** authenticate `apps/MountFix/*.cgi`, so every CGI calls `require_adm_session()` first. It runs ADM's own `/usr/webman/portal/apis/admin.cgi` locally with `act=get-nonstop&sid=<sid>` and fails closed unless ADM answers `"success": true` (valid administrator session).
+- All responses go through `send_json` / `send_json_error` (`Content-Type: application/json`, escaped strings). Unknown `act` returns `{"success": false, "error": "Invalid action"}`.
+- `save_mountfix_config` accepts only `{targetVolume, selectedApps:[{name}]}` with a valid volume and existing, non-protected packages, and normalizes what it stores.
+- ADM's `AS.ARC.ajax` calls `failure(json)` whenever the top-level `success` is `false`; the UI reads `json.result.target_exists` / `json.result.error` there.
+- Volume detection (`get_volume_rotational`) resolves SATA (`sdd4` → `sdd`) and NVMe/MMC (`nvme0n1p1` → `nvme0n1`) partitions, and `get_volumes_json` uses `df -Ph`.
+
 ---
 
 ## 5. Additional Architecture Topics
 
-For full audit history, field findings, and the Stage 2 roadmap (UI-to-config synchronization, `rsync -aHAX` hardening, NVMe detection, and single-app validation optimization), see [docs/TECHNICAL-REVIEW.md](TECHNICAL-REVIEW.md) and [IDEAS.md](../IDEAS.md).
+For full audit history, field findings, and the Stage 2 roadmap (UI-to-config synchronization, `rsync -aHAX` hardening, single-app validation optimization), see [docs/TECHNICAL-REVIEW.md](TECHNICAL-REVIEW.md) and [IDEAS.md](../IDEAS.md).
 

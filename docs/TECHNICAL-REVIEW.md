@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Date** | 2026-11-19 (updated 2026-11-24) |
-| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 implemented & verified on NAS in `0.0.0.103`–`0.0.0.105` |
+| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 implemented & verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branch 1 implemented in `0.0.0.106` (installed on NAS, see §8) |
 | **Scope** | Whole repository: `CONTROL/`, `webman/` (CGI + shell library + ExtJS UI), `build.sh` / `buildJs.sh`, `tests/`, `etc/` |
-| **Status** | **Stage 1 complete & production-verified** (`F1`, `F2`, `F11` start-only `sysctl`, persistent logging, ADM syslog warnings, shutdown-aware cleanup). **Stage 2 (`F3`–`F10`, `F12`–`F17`) pending.** |
+| **Status** | **Stage 1 complete & production-verified** (`F1`, `F2`, `F11` start-only `sysctl`, persistent logging, ADM syslog warnings, shutdown-aware cleanup). **Stage 2 Branch 1 implemented (`0.0.0.106`, installed on NAS):** `F5`, `F6`, `F7`, `F13`, `F14` and the shell items of `F17` (see §8). **Remaining:** `F3`, `F4`, `F8`, `F9`, `F10`, `F11` (UI option), `F12`, `F15`, `F16` and the JS items of `F17`. |
 
 ---
 
@@ -322,11 +322,11 @@ The script changes system-wide kernel settings on **every** invocation (includin
 | 1 | **F1** Safe `stop` path (`start-stop.sh.old` backup, no `fuser`/`umount -l`, `umount`-first fast path, `/proc/mounts` fallback, shutdown-gated per-path `SIGTERM`→`SIGKILL`) | ✅ **Done & verified (`0.0.0.103`–`0.0.0.105`)** | Verified on ADM 5.1.5: normal upgrades skip busy apps safely; real reboot unmounts all 5 apps in ~15 s with zero `stormand` hang. |
 | 2 | **F2** Boot & shutdown without `jq` (`etc/mounts.list` + `post-install.sh` upgrade generation) | ✅ **Done & verified (`0.0.0.103`)** | Verified with stripped `PATH` in `tests/test_stop_safety.sh` and across two real NAS reboots (`< 1 s` mount time). |
 | 3 | **F11** `sysctl` tuning on `start` only | 🟡 **Partial (`0.0.0.103`)** | Moved out of `stop` so shutdown never alters dirty writeback timers; UI toggle / restore on uninstall still optional. |
-| 4 | **F6** Shared POSIX shell library (`CONTROL/lib.sh`) | ⏳ Pending (Stage 2) | Consolidate helpers across `CONTROL/common.sh` and `webman/scripts/common.sh`. |
+| 4 | **F6** Shared POSIX shell library (`CONTROL/lib.sh`) | ✅ **Done (`0.0.0.106`)** | `CONTROL/lib.sh` is sourced by `start-stop.sh`, `post-install.sh` and `webman/scripts/common.sh`. `CONTROL/common.sh` is a temporary shim — **remove in Branch 4**. |
 | 5 | **F3** Runtime mount state = boot config (`mount.cgi` updates config + `mounts.list`, mismatch warning in grid) | ⏳ Pending (Stage 2) | Prevents UI mount without *Apply* from diverging on reboot. |
 | 6 | **F4**, **F12** Safe `rsync` flags (`-aHAX`), server-side running check, non-blocking `migrate.cgi` background FD redirection | ⏳ Pending (Stage 2) | Protects Docker `overlay2` xattrs/hardlinks and prevents HTTP hang during large transfers. |
-| 7 | **F13**, **F14**, **F15** NVMe SSD detection & `df -Ph`, self-relocation guard (`MountFix`), `pre-install.sh` `PATH` | ⏳ Pending (Stage 2) | Unblocks NVMe volumes and prevents relocating `MountFix` itself. |
-| 8 | **F5**, **F7**, **F8** Config input validation, unified CGI JSON responses, atomic transfer lock + `DONE` marker | ⏳ Pending (Stage 2) | Backend hardening and API consistency. |
+| 7 | **F13**, **F14**, **F15** NVMe SSD detection & `df -Ph`, self-relocation guard (`MountFix`), `pre-install.sh` `PATH` | 🟡 **Partial** — `F13`, `F14` ✅ done (`0.0.0.106`); `F15` ⏳ pending (Branch 4) | Unblocks NVMe volumes and prevents relocating `MountFix` itself. |
+| 8 | **F5**, **F7**, **F8** Config input validation, unified CGI JSON responses, atomic transfer lock + `DONE` marker | 🟡 **Partial** — `F5`, `F7` ✅ done (`0.0.0.106`); `F8` ⏳ pending (Branch 2) | Backend hardening and API consistency. `POST`-only enforcement for mutating CGIs is deferred to Branch 3 (needs `mf_actions.js` changes). |
 | 9 | **F9**, **F10**, **F16**, **F17** UI cleanup, double-`validate()` fix, single-app `du` optimization (`IDEAS.md` §1), `pre-uninstall.sh` mount guard | ⏳ Pending (Stage 2) | UX responsiveness and repository hygiene. |
 
 ### 4.1 Stage 2 Execution Plan (Agreed Branch & Commit Grouping)
@@ -536,3 +536,32 @@ Verified on ASUSTOR AS5304T (ADM `5.1.5.RNN1`) with 5 relocated apps (`entware`,
   - `entware` detected `10177(tmux: client) 10180(tmux: server) 10189(bash)`, logged an ADM Warning (`lvl=2`), sent `SIGTERM`, and unmounted cleanly 2 seconds later (`15:20:25`).
   - **Result in ADM `Log_System`:** Zero `Forced stop 'stormand' service` errors and zero `The NAS did not shut down properly last time.` warnings.
 - **Boot (`15:24:19`):** All 5 apps bind-mounted from `/volume2` in **< 1 second** (`stat -c %d:%i` matched across all 5), and all Docker containers (`PortainerCE`, `Forgejo`, `openclaw-gateway`), Photo Gallery, MiniDLNA, and Download Center started cleanly on `/volume2`.
+
+
+---
+
+## 8. Stage 2 — Branch 1 Results (`refactor/shared-lib-and-cgi-hardening`, `0.0.0.106`)
+
+Implemented as 3 atomic commits plus one fix wave, each task reviewed (spec + quality) and a whole-branch review at the end. Installed and checked read-only on the NAS (ADM 5.1.5): all 5 relocated apps stayed mounted through the upgrade (`Already mounted` ×5 in `var/mountfix.log`), `mounts.list` regenerated.
+
+| Commit | Findings | Summary |
+|---|---|---|
+| `bcb8229` | `F6`, `F14`, `F17` (shell) | `CONTROL/lib.sh` (path builders, validators, `is_mounted`, `pids_using_paths`, `json_escape`, `mounts.list` helpers), `MountFix` blocked from relocation, POSIX `url_decode`, no `readonly`, dead code removed. |
+| `18693f4` | `F5`, `F7` | `send_json` / `send_json_error`, fail-closed `require_adm_session`, strict `save_mountfix_config` validation + normalization, unknown `act` handled, CGIs `0755`, `"unknown"` fallback version. |
+| `c2470bd` | `F13` | `resolve_base_block_device` (`nvme0n1p1` → `nvme0n1`), exact `/proc/mounts` lookup, `df -Ph` with wrapped-line handling. |
+| `157d0d3` | fix wave | `act=get-nonstop` for `admin.cgi`, UI `failure(json)` handling, empty-output guard in `mount.cgi`. |
+
+### 8.1 Field facts learned (ADM 5.1.5)
+
+- **`lighttpd` does not authenticate `apps/<pkg>/*.cgi`** (verified: `config.cgi?act=get` without `sid` returned full JSON as `root`). Authentication is therefore done by the CGIs themselves.
+- **Session check:** `/usr/webman/portal/apis/admin.cgi` can be run locally. After a valid admin `sid` it requires an `act`; `act=get-nonstop` is read-only and returns `{"success": true, ...}` for admins, `error_code 5000` for invalid sessions and `5301` when `act` is missing. `require_adm_session()` calls it with `act=get-nonstop&sid=<sid>` and fails closed.
+- **`AS.ARC.ajax`** routes any response with top-level `"success": false` to `failure(json)`, not `success(json)`. The UI therefore reads `json.result.target_exists` / `json.result.error` in `failure` handlers.
+- `df -Ph` works on the NAS BusyBox.
+- BusyBox/POSIX `awk`: `gsub(/\\/, "\\\\")` does not escape backslashes — `json_escape` uses a `substr` loop instead (tests run with and without `POSIXLY_CORRECT=1`).
+
+### 8.2 Open items carried forward
+
+- **Branch 4:** remove the `CONTROL/common.sh` compatibility shim (marked `# shortcut:`).
+- **Branch 3:** `entware` relocation warning in the UI; `POST`-only mutating CGIs together with `mf_actions.js`.
+- **Deferred minors:** `url_decode` turns `%00` into an empty string (all decoded values are validated afterwards); `get_volume_rotational` relies on `PROC_MOUNTS` set by `lib.sh`.
+- **Not verified live:** an authenticated UI session (volumes, app list, *Apply*, *Copy to target* with an existing target directory) after `0.0.0.106`. Multi-layer LVM (`dm-*`) volumes without direct `slaves/` fall back to HDD.
