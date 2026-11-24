@@ -1,6 +1,6 @@
 #!/bin/sh
 
-export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/opt/bin:/opt/sbin
+export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/opt/bin:/opt/sbin:/usr/local/AppCentral/entware/opt/bin
 
 DIR_VOL1="${DIR_VOL1:-/volume1}"
 readonly DIR_VOL1
@@ -83,7 +83,7 @@ load_mountfix_config() {
 # Save MountFix config with backup rotation
 ####################################################################
 save_mountfix_config() {
-    local config_dir="/usr/local/AppCentral/MountFix/etc"
+    local config_dir="${MF_CONFIG_DIR:-/usr/local/AppCentral/MountFix/etc}"
     local config_filename="mountfix.conf"
     local config_file="$config_dir/$config_filename"
     local max_backups=5
@@ -123,6 +123,16 @@ save_mountfix_config() {
 
     # Atomic overwrite of config
     mv "$tmp_file" "$config_file"
+
+    # Keep jq-free mounts.list in sync for boot/shutdown
+    local ctrl_common
+    for ctrl_common in "$(dirname "$config_dir")/CONTROL/common.sh" "/usr/local/AppCentral/MountFix/CONTROL/common.sh"; do
+        if [ -f "$ctrl_common" ]; then
+            ( . "$ctrl_common" && generate_mounts_list "$config_file" "$config_dir/mounts.list" ) || true
+            break
+        fi
+    done
+
     return 0
 }
 

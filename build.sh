@@ -73,6 +73,7 @@ echo "Temp folder created: $TEMP_FOLDER"
 
 # 2. Copy required
 cp -r CONTROL "$TEMP_FOLDER/"
+rm -f "$TEMP_FOLDER"/CONTROL/*.old
 cp -r webman "$TEMP_FOLDER/"
 cp -r etc "$TEMP_FOLDER/"
 

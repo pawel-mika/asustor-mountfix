@@ -15,6 +15,7 @@ TMP_PKG_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_PKG_DIR"' EXIT
 
 cp -r CONTROL "$TMP_PKG_DIR/"
+rm -f "$TMP_PKG_DIR"/CONTROL/*.old
 cp -r webman "$TMP_PKG_DIR/"
 cp -r etc "$TMP_PKG_DIR/"
 ./buildJs.sh "$TMP_PKG_DIR" true
