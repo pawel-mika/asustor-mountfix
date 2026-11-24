@@ -8,9 +8,9 @@ Storage Optimization: Move heavy apps (Docker, PhotoGallery, etc.) from Volume 1
 
 ADM Integrated UI: Native Look & Feel interface built with ExtJS.
 
-Boot-safe: Includes an init script (S01mountfix) to ensure mounts are established before apps start.
+Boot-safe: Installs an ADM init script (`S02MountFix` / `K02MountFix`) that establishes bind mounts before relocated apps start (`jq`-free boot path via `etc/mounts.list`).
 
-Smart Cleanup: Graceful unmounting with process-check logic to prevent filesystem lockups during shutdown.
+Smart Cleanup: Fast non-lazy unmounting with per-path `/proc` holder detection, persistent logging (`var/mountfix.log`), and shutdown-aware cleanup so ADM `stormand` always unmounts volumes cleanly.
 
 # Prerequisities (TBD)
 
@@ -69,26 +69,24 @@ At the current development stage, MountFix uses the ADM plugin architecture to i
 - **Language**: Mainly Bash (scripts), JavaScript (UI ExtJS), JSON (configuration).
 - **Dependencies**: Requires entware (opkg) to install bash, jq.
 
-## Application Migration Mechanism
-1. **Configuration**: The `etc/mountfix.conf` file contains JSON with `targetVolume` (e.g., "/volume2") and `selectedApps` (array of objects with `name` and `enabled`).
-2. **Application Detection**: `webman/scripts/common.sh` contains the `get_installed_apps_json()` function, which parses `/usr/builtin/etc/appcentral/installed.json` using jq to get the list of installed applications.
-3. **Validation**: `validate.cgi` checks the sizes of source folders (`/volume1/.@plugins/AppCentral/APP`) and target folders (`TARGET/AppCentral/APP`), and the mounting status by comparing inodes (`check_app_mount_json`).
-4. **Migration**: `scripts/migrate.sh` copies application folders from source to target. `setup.cgi` (incomplete) should handle the "setup_app" action.
-5. **Mounting**: `CONTROL/start-stop.sh` (partially commented out) executes `mount --bind TARGET/AppCentral/APP /volume1/.@plugins/AppCentral/APP` so the system sees the data in the original location. Additionally, sets sysctl for memory optimization (vm.swappiness=1, vm.vfs_cache_pressure=10, vm.dirty_writeback_centisecs=6000).
-6. **Init Script**: S01mountfix ensures mounts are performed before applications start.
-7. **UI**: `mountfix.js` (ExtJS) displays a combo for volume selection (with SSD/HDD info via `get_volume_rotational`) and a grid of applications with status, sizes, mounting.
+## Application Migration & Boot Mechanism
+1. **Configuration**: `etc/mountfix.conf` stores the UI configuration (`targetVolume` and `selectedApps`), while `etc/mounts.list` provides a pre-validated, `jq`-free `SRC:TGT` list for boot/shutdown scripts (kept in sync on config save and package upgrades).
+2. **Application Detection**: `webman/scripts/common.sh` (`get_installed_apps_json()`) parses `/usr/builtin/etc/appcentral/installed.json` to list installed AppCentral packages.
+3. **Validation**: `validate.cgi` checks source (`/volume1/.@plugins/AppCentral/APP`) and target (`TARGET/AppCentral/APP`) directory sizes and verifies active bind mounts via device/inode comparison (`stat -c %d:%i`).
+4. **Migration & Sync-Back**: `migrate.cgi` runs background `rsync` transfers between `/volume1` and the target SSD volume with FIFO progress reporting.
+5. **Mounting & Shutdown**: `CONTROL/start-stop.sh` (`S02MountFix` / `K02MountFix`) binds `TARGET/AppCentral/APP` onto `/volume1/.@plugins/AppCentral/APP` at boot, applies `sysctl` memory/VFS tuning on `start`, and safely unmounts in reverse order on `stop` (skipping busy apps during runtime upgrades and cleaning up lingering holders only on real ADM `REBOOT`/`SHUTDOWN`).
+6. **Observability**: Logs all boot/shutdown operations to `var/mountfix.log` and emits warnings to the ADM System Log (`/usr/sbin/syslog --level 1`).
+7. **UI**: `mountfix.js` (ExtJS) provides target volume selection (SSD/HDD detection) and per-application copy, mount, unmount, and sync-back actions.
 
 ## CGI API
-- `apps.cgi?act=get`: Returns the list of applications in JSON.
-- `config.cgi?act=get`: Returns config, apps, volumes.
-- `config.cgi?act=set`: Saves config from POST JSON.
-- `validate.cgi?act=get&target=VOL&app=NAME`: Validates the application.
-- `setup.cgi?act=setup_app`: (Incomplete) For application migration.
+- `apps.cgi?act=get`: Returns installed applications in JSON.
+- `config.cgi?act=get`: Returns current configuration, apps, volumes, and package version.
+- `config.cgi?act=set`: Saves configuration from POST JSON and updates `etc/mounts.list`.
+- `validate.cgi?act=get&target=VOL[&app=NAME]`: Returns mount status and disk usage per app.
+- `mount.cgi?act=mount|unmount&app=NAME&target=VOL`: Mounts or unmounts an application directory.
+- `migrate.cgi?act=migrate|sync_back|status`: Starts or polls background data migration / sync-back.
 
-## Development Status
-- Mounting code in `start-stop.sh` is commented out – likely requires testing and completion.
-- `setup.cgi` requires implementation of migration logic.
-- Lack of full integration with AppCentral for automatic stopping/starting of applications during migration.
-- Testing on a real ASUSTOR NAS required for validation.
-
-For further development: Implement full API, test on various RAID/SSD configurations, add logging and error handling.
+## Documentation & Roadmap
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): Internal IPC, transfer flow, and boot/shutdown lifecycle.
+- [docs/TECHNICAL-REVIEW.md](docs/TECHNICAL-REVIEW.md): Full security/reliability audit, Stage 1 production verification (ADM 5.1.5), and Stage 2 roadmap.
+- [IDEAS.md](IDEAS.md): Performance optimization proposals for `validate.cgi`.

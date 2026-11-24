@@ -154,10 +154,39 @@ Data transfer operations enforce strict safety constraints to prevent data corru
 
 ---
 
-## 4. Future Architecture Topics (Roadmap)
+## 4. Boot & Shutdown Bind-Mount Lifecycle (`S02MountFix` / `K02MountFix`)
 
-The following architectural components will be documented in upcoming revisions of this guide:
-- **Bind-Mount Lifecycle & Boot Safety:** Detailed mechanics of `CONTROL/start-stop.sh` and `/opt/etc/init.d/S01mountfix`.
-- **Validation Engine:** Inode comparison (`check_app_mount_json`), disk size calculations (`du -sk`), and rotational drive detection (`sysfs`).
-- **Configuration Management:** Structure of `/volume1/.@plugins/AppCentral/MountFix/etc/mountfix.conf`.
+ADM registers `CONTROL/start-stop.sh` at boot/stop priority `2` (`/usr/local/etc/init.d/S02MountFix` and `K02MountFix`):
+- **Boot order (`rcS.pluginsfs`):** `S02MountFix` runs *before* relocated applications (`S20download-center`, `S50minidlna`, `S50photogallery`, `S52entware`, `S65docker-ce`).
+- **Shutdown order (`rcK.pluginsfs`, sorted with `sort -r`):** `K80…` → `K52entware` → `K35docker-ce` → … → `K02MountFix`, followed later by built-in system services (`sshd` and `S21stormand`).
+
+### 4.1 `jq`-Free Configuration (`etc/mounts.list`)
+
+Because `S02MountFix` starts before `S52entware` (and `K02MountFix` stops after `K52entware` removes `/opt/bin`), boot and shutdown scripts cannot depend on Entware's `jq`:
+- `etc/mountfix.conf` remains the JSON source of truth for the ExtJS UI.
+- `generate_mounts_list()` (in `CONTROL/common.sh`) validates `targetVolume` (`^/volume[0-9]+$`) and each selected package name, and atomically writes `etc/mounts.list` (`<targetVol>/AppCentral/<app>:/volume1/.@plugins/AppCentral/<app>`, one entry per line).
+- `etc/mounts.list` is regenerated automatically on every UI config save (`save_mountfix_config`) and during package `install`/`upgrade` (`CONTROL/post-install.sh`).
+- At boot/shutdown, `get_mount_configs()` reads `etc/mounts.list` using pure POSIX `sh` (`while IFS=: read -r src tgt`).
+
+### 4.2 Safe & Fast Unmount Strategy (`do_stop`)
+
+ADM enforces a 60-second per-script shutdown timeout (`/etc/script/script_trap.sh`), and `S21stormand stop` requires all cross-volume bind mounts between `/volume2` and `/volume1` to be detached cleanly before volumes can unmount:
+
+1. **Target Discovery (`collect_stop_entries`):** Combines configured entries from `mounts.list` with any live `/volume1/.@plugins/AppCentral/<app>` bind mounts discovered directly from `/proc/mounts`, deduplicated and reversed (`sed -n '1!G;h;$p'`).
+2. **`umount`-First Fast Path:** Attempts a plain, non-lazy `umount "$tgt"` first. Idle directories unmount in `~0.01 s` without scanning `/proc`; busy mounts immediately return `EBUSY` with no side effects (lazy `umount -l` and filesystem-wide `fuser -m` are never used).
+3. **Per-Path Holder Inspection (`pids_using_paths`):** Only when `umount` fails with `EBUSY`, scans `/proc/[0-9]*/{cwd,root,exe,fd/*,maps}` for exact path prefix matches on `$tgt` and `$src`, formatting holders as `pid(comm)` within a shared wall-clock budget (`STOP_MAX_SECONDS=12`).
+4. **Context-Aware Handling (`/var/log/halt-action`):**
+   - **Normal runtime (AppCentral stop / disable / upgrade — `halt-action` empty):** Never sends signals to running processes; logs a warning and leaves busy mounts intact so running services (e.g., Docker) continue uninterrupted.
+   - **System `REBOOT` or `SHUTDOWN` (`halt-action` contains `REBOOT`/`SHUTDOWN`):** Sends `SIGTERM` (2 s grace) followed by `SIGKILL` (1 s) *only* to the exact per-path PIDs still holding the mount (e.g., lingering SSH `tmux`/`bash` sessions on `entware`), then performs a clean `umount` so `stormand` shuts down cleanly.
+
+### 4.3 Observability & Logging
+
+- **Persistent Log:** Every `start`/`stop` action logs timestamped entries to `/usr/local/AppCentral/MountFix/var/mountfix.log` (automatically rotated when exceeding 500 lines).
+- **ADM System Event Log:** Warnings (such as skipped busy mounts or shutdown `SIGTERM` cleanup) are also emitted to ADM's system log via `/usr/sbin/syslog --log 0 --level 1 --user SYSTEM --event "[MountFix] ..."`.
+
+---
+
+## 5. Additional Architecture Topics
+
+For full audit history, field findings, and the Stage 2 roadmap (UI-to-config synchronization, `rsync -aHAX` hardening, NVMe detection, and single-app validation optimization), see [docs/TECHNICAL-REVIEW.md](TECHNICAL-REVIEW.md) and [IDEAS.md](../IDEAS.md).
 

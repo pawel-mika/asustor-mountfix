@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Date** | 2026-11-19 |
-| **Reviewed revision** | branch `feature/mountfix-safety-sync`, commit `96ac956` (package version `0.0.0.102`) |
+| **Date** | 2026-11-19 (updated 2026-11-24) |
+| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 implemented & verified on NAS in `0.0.0.103`–`0.0.0.105` |
 | **Scope** | Whole repository: `CONTROL/`, `webman/` (CGI + shell library + ExtJS UI), `build.sh` / `buildJs.sh`, `tests/`, `etc/` |
-| **Status** | Analysis only — **no code has been changed yet**. This document is the work order for the follow-up implementation. |
+| **Status** | **Stage 1 complete & production-verified** (`F1`, `F2`, `F11` start-only `sysctl`, persistent logging, ADM syslog warnings, shutdown-aware cleanup). **Stage 2 (`F3`–`F10`, `F12`–`F17`) pending.** |
 
 ---
 
@@ -315,19 +315,19 @@ The script changes system-wide kernel settings on **every** invocation (includin
 
 ---
 
-## 4. Suggested implementation order
+## 4. Implementation status & remaining roadmap
 
-| # | Finding | Why first |
-|---|---|---|
-| 1 | **F1** stop path (with `start-stop.sh.old` backup) | Can kill running services today on any MountFix stop/upgrade. |
-| 2 | **F2** boot without `jq` | Mounts may silently not happen after reboot. |
-| 3 | **F6** shared library | F1/F2/F4/F5 all need the same helpers; do it right after F1/F2 to avoid duplicating fixes. |
-| 4 | **F3** mount intent = config | Prevents split-brain together with F2. |
-| 5 | **F4** rsync flags + server-side running check | Data integrity of Docker copies. |
-| 6 | **F5**, **F7**, **F8** | Hardening and API consistency. |
-| 7 | **F9**, **F10**, **F11** | Cleanup, performance, build hygiene. |
-
-After F1+F2 are merged and a package is built, the user should install it on the NAS and perform one controlled reboot to confirm all configured apps are mounted (`grep AppCentral /proc/mounts`) and nothing was killed during shutdown.
+| # | Finding | Status | Notes |
+|---|---|---|---|
+| 1 | **F1** Safe `stop` path (`start-stop.sh.old` backup, no `fuser`/`umount -l`, `umount`-first fast path, `/proc/mounts` fallback, shutdown-gated per-path `SIGTERM`→`SIGKILL`) | ✅ **Done & verified (`0.0.0.103`–`0.0.0.105`)** | Verified on ADM 5.1.5: normal upgrades skip busy apps safely; real reboot unmounts all 5 apps in ~15 s with zero `stormand` hang. |
+| 2 | **F2** Boot & shutdown without `jq` (`etc/mounts.list` + `post-install.sh` upgrade generation) | ✅ **Done & verified (`0.0.0.103`)** | Verified with stripped `PATH` in `tests/test_stop_safety.sh` and across two real NAS reboots (`< 1 s` mount time). |
+| 3 | **F11** `sysctl` tuning on `start` only | 🟡 **Partial (`0.0.0.103`)** | Moved out of `stop` so shutdown never alters dirty writeback timers; UI toggle / restore on uninstall still optional. |
+| 4 | **F6** Shared POSIX shell library (`CONTROL/lib.sh`) | ⏳ Pending (Stage 2) | Consolidate helpers across `CONTROL/common.sh` and `webman/scripts/common.sh`. |
+| 5 | **F3** Runtime mount state = boot config (`mount.cgi` updates config + `mounts.list`, mismatch warning in grid) | ⏳ Pending (Stage 2) | Prevents UI mount without *Apply* from diverging on reboot. |
+| 6 | **F4**, **F12** Safe `rsync` flags (`-aHAX`), server-side running check, non-blocking `migrate.cgi` background FD redirection | ⏳ Pending (Stage 2) | Protects Docker `overlay2` xattrs/hardlinks and prevents HTTP hang during large transfers. |
+| 7 | **F13**, **F14**, **F15** NVMe SSD detection & `df -Ph`, self-relocation guard (`MountFix`), `pre-install.sh` `PATH` | ⏳ Pending (Stage 2) | Unblocks NVMe volumes and prevents relocating `MountFix` itself. |
+| 8 | **F5**, **F7**, **F8** Config input validation, unified CGI JSON responses, atomic transfer lock + `DONE` marker | ⏳ Pending (Stage 2) | Backend hardening and API consistency. |
+| 9 | **F9**, **F10**, **F16**, **F17** UI cleanup, double-`validate()` fix, single-app `du` optimization (`IDEAS.md` §1), `pre-uninstall.sh` mount guard | ⏳ Pending (Stage 2) | UX responsiveness and repository hygiene. |
 
 ---
 
@@ -483,15 +483,17 @@ During the ADM firmware upgrade (`5.1.4.RM62` → `5.1.5.RNN1`) on `0.0.0.102`, 
    - **Why `entware` stayed busy:** ADM stops AppCentral plugins (`rcK.pluginsfs`) **before** built-in services (`rcK.builtinfs`, including `sshd`). Active user SSH sessions running Entware `bash`/`tmux` keep `/volume2/AppCentral/entware/opt/...` open when `K02MountFix` runs. Because `0.0.0.103` skipped unmounting `entware`, `stormand` still hit `EBUSY` 90 s later.
    - **Performance observation:** Scanning `/proc` via BusyBox `readlink` + `awk` took ~5 s per pass (2 passes per idle mount = ~31 s total for 4 mounts).
 
-### 7.2 Targeted Fixes (`0.0.0.104`, branch `fix/shutdown-fast-unmount`)
+### 7.2 Targeted Fixes (`0.0.0.104`–`0.0.0.105`, branch `fix/shutdown-fast-unmount`)
 
 1. **`umount`-first fast path in `CONTROL/start-stop.sh`:**
    - Plain non-lazy `umount "$tgt"` is atomic in the Linux kernel: idle mounts unmount in `~0.01 s`, while busy mounts immediately return `EBUSY` with no side effects.
    - Only run `pids_using_paths` when `umount` actually returns `EBUSY` (and avoid running it twice per iteration). Cuts typical `stop` time from ~31 s to ~1 s.
 2. **Shutdown-aware per-path cleanup (gated strictly on `/var/log/halt-action`):**
    - ADM writes `REBOOT` or `SHUTDOWN` to `/var/log/halt-action` before running `rcK.raminitfs` → `rcK.builtinfs` → `rcK.pluginsfs`; during normal runtime (manual stop/disable/upgrade in AppCentral) the file is empty.
-   - **Normal runtime (`halt-action` empty):** Never send signals; skip busy mounts and log `pid(comm)` (e.g. `10180(tmux) 10189(bash)`).
+   - **Normal runtime (`halt-action` empty):** Never send signals; skip busy mounts and log `pid(comm)` (e.g. `10180(tmux: server) 10189(bash)`).
    - **Real `REBOOT`/`SHUTDOWN`:** If a mount is still `EBUSY` after the grace period, send `SIGTERM` (2 s) → `SIGKILL` (1 s) **only to the exact PIDs returned by `pids_using_paths`** (never `fuser -k -m`), then perform a clean non-lazy `umount` so `stormand` can cleanly unmount `/volume2` and `/volume1`.
+3. **ADM Syslog severity (`0.0.0.105`):**
+   - Adjusted `/usr/sbin/syslog` calls in `log_warn()` from `--level 2` (ADM Error, stored as `lvl=4` in `Log_System`) to `--level 1` (ADM Warning, `lvl=2`), matching ADM's own `/etc/script/script_trap.sh` convention.
 
 ### 7.3 Design Note: Disabling MountFix While Apps Are Running
 
@@ -501,3 +503,14 @@ During the ADM firmware upgrade (`5.1.4.RM62` → `5.1.5.RNN1`) on `0.0.0.102`, 
   1. ADM invokes `stop` during every MountFix package upgrade — stopping Docker or running multi-GB `rsync` during an upgrade is undesirable.
   2. ADM's `script_trap.sh` enforces a hard **60 s** timeout on `stop`, which would `SIGKILL` `rsync` mid-transfer.
 - **Future UI consideration (Stage 2):** If a one-click rollback is desired, implement it as an explicit UI workflow (e.g., *"Revert to HDD"* / per-app *Unmount & Sync-back* with optional restart prompt) running asynchronously outside init timeouts, paired with an active-mount guard in `CONTROL/pre-uninstall.sh` (F10).
+
+### 7.4 Production Verification of `0.0.0.105` (Clean Reboot Confirmed)
+
+Verified on ASUSTOR AS5304T (ADM `5.1.5.RNN1`) with 5 relocated apps (`entware`, `minidlna`, `photogallery`, `download-center`, `docker-ce`):
+
+- **Live package upgrade (`0.0.0.104` → `0.0.0.105`):** With `halt-action` empty, `stop` logged `pid(comm)` warnings (`lvl=2` in `Log_System`), killed zero processes, and left Docker containers and apps running uninterrupted.
+- **Controlled NAS reboot (`15:20:10–15:20:25`):**
+  - `docker-ce`, `download-center`, `photogallery`, and `minidlna` unmounted in **1 second** (`15:20:11`) via the `umount`-first fast path.
+  - `entware` detected `10177(tmux: client) 10180(tmux: server) 10189(bash)`, logged an ADM Warning (`lvl=2`), sent `SIGTERM`, and unmounted cleanly 2 seconds later (`15:20:25`).
+  - **Result in ADM `Log_System`:** Zero `Forced stop 'stormand' service` errors and zero `The NAS did not shut down properly last time.` warnings.
+- **Boot (`15:24:19`):** All 5 apps bind-mounted from `/volume2` in **< 1 second** (`stat -c %d:%i` matched across all 5), and all Docker containers (`PortainerCE`, `Forgejo`, `openclaw-gateway`), Photo Gallery, MiniDLNA, and Download Center started cleanly on `/volume2`.
