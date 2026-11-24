@@ -244,7 +244,7 @@ if grep -q "umount ${APP_TGT_1}" "$MOUNT_LOG"; then echo "FAIL: busy app1 was un
 if grep -q "umount ${APP_TGT_MMAP}" "$MOUNT_LOG"; then echo "FAIL: mmapped app_mmap was unmounted"; exit 1; fi
 if grep -q "umount ${APP_TGT_EXE}" "$MOUNT_LOG"; then echo "FAIL: exe-busy app_exe was unmounted"; exit 1; fi
 if grep -q "umount ${APP_TGT_4}" "$MOUNT_LOG"; then echo "FAIL: unmounted app4 had umount called"; exit 1; fi
-grep -q "1001(tmux)" "$SYSLOG_LOG" || { echo "FAIL: syslog warning missing pid(comm) format"; exit 1; }
+grep -q -- "--level 1 .*1001(tmux)" "$SYSLOG_LOG" || { echo "FAIL: syslog warning missing --level 1 or pid(comm) format"; exit 1; }
 
 UMOUNT_ORDER=$(grep '^umount ' "$MOUNT_LOG")
 EXPECTED_ORDER=$(printf 'umount %s\numount %s' "$APP_TGT_3" "$APP_TGT_2")

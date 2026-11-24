@@ -44,7 +44,8 @@ log_warn() {
     echo "$msg" >&2
     echo "$msg" >> "$LOG_FILE" 2>/dev/null || true
     if [ -x "$ADM_SYSLOG_BIN" ]; then
-        "$ADM_SYSLOG_BIN" --log 0 --level 2 --user SYSTEM --event "[MountFix] $*" 2>/dev/null || true
+        # ADM syslog levels: 0=Info, 1=Warning, 2=Error
+        "$ADM_SYSLOG_BIN" --log 0 --level 1 --user SYSTEM --event "[MountFix] $*" 2>/dev/null || true
     fi
 }
 
