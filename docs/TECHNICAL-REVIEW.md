@@ -11,10 +11,10 @@
 
 ## 0. How to use this document (for the implementing agent)
 
-1. Work on a **new branch** created from `feature/mountfix-safety-sync` (e.g. `fix/review-2026-11`). Do not commit to `master` directly; `master` is behind and does not match what is installed on the NAS.
-2. Fix items **in priority order** (section 3). Each finding has: *Where*, *Problem*, *Impact*, *Proposed fix*, *Acceptance criteria*. One finding ≈ one commit.
-3. Read section 2 (*Context*) first — several fixes depend on facts about ADM that are not obvious from the code.
-4. Do **not** test destructive behaviour (stop/unmount/kill paths) on the real NAS without the user being present. Unit-test in a Linux/WSL sandbox first (see the test ideas in each finding).
+1. Branch off `master` (`0.0.0.105`+, which matches what is deployed on the NAS) following the **4-branch Stage 2 execution plan in §4.1**. Do not commit directly to `master` without verification.
+2. Group overlapping changes into the **thematic branches and atomic commits defined in §4.1** rather than creating 15 separate branches (most remaining findings touch the same `webman/scripts/common.sh` and `webman/mf_actions.js` files).
+3. Read section 2 (*Context*) and section 7 (*Field Verification*) first — several fixes depend on facts about ADM verified on production hardware.
+4. Do **not** test destructive behaviour (stop/unmount/kill paths) on the real NAS without the user being present. Unit-test locally first (see the test ideas in each finding).
 5. Keep the existing style: POSIX `sh` (BusyBox `ash` on the NAS — no bashisms in `CONTROL/` or `webman/*.cgi`), ExtJS 4-style `Ext.define` in the UI, 4-space indent, Prettier config in `.prettierrc`.
 
 ---
@@ -328,6 +328,28 @@ The script changes system-wide kernel settings on **every** invocation (includin
 | 7 | **F13**, **F14**, **F15** NVMe SSD detection & `df -Ph`, self-relocation guard (`MountFix`), `pre-install.sh` `PATH` | ⏳ Pending (Stage 2) | Unblocks NVMe volumes and prevents relocating `MountFix` itself. |
 | 8 | **F5**, **F7**, **F8** Config input validation, unified CGI JSON responses, atomic transfer lock + `DONE` marker | ⏳ Pending (Stage 2) | Backend hardening and API consistency. |
 | 9 | **F9**, **F10**, **F16**, **F17** UI cleanup, double-`validate()` fix, single-app `du` optimization (`IDEAS.md` §1), `pre-uninstall.sh` mount guard | ⏳ Pending (Stage 2) | UX responsiveness and repository hygiene. |
+
+### 4.1 Stage 2 Execution Plan (Agreed Branch & Commit Grouping)
+
+To avoid merge conflicts in `webman/scripts/common.sh` and `webman/mf_actions.js` and avoid 15 separate `.apk` deployments on the NAS, Stage 2 work is grouped into **4 sequential feature branches** (1 branch = 1 `.apk` release verification), each structured into **2–3 small, revertible atomic commits**:
+
+1. **Branch 1: `refactor/shared-lib-and-cgi-hardening`** *(backend foundation — implement first so subsequent branches target a single library)*
+   - **Commit 1 (`F6` + `F14` + shell items from `F17`):** Extract shared POSIX `CONTROL/lib.sh` (path builders, validators, `is_app_bind_mounted`, `pids_using_paths`), block self-relocation of `MountFix` (with warning note for `entware`), fix `url_decode` (`printf '%b'` + case-insensitive hex), and remove `readonly` re-sourcing traps.
+   - **Commit 2 (`F5` + `F7`):** Introduce unified `send_json` response helper with proper escaping, validate inputs across `save_mountfix_config` and all `webman/*.cgi`, handle unknown `act` actions, normalize `*.cgi` permissions to `755`, remove hard-coded fallback version in `config.cgi`, and verify/enforce ADM `sid` session authentication.
+   - **Commit 3 (`F13`):** Fix NVMe partition-to-disk resolution (`nvme0n1p1` → `nvme0n1`) in `get_volume_rotational` and use `df -Ph` in `get_volumes_json`.
+
+2. **Branch 2: `fix/transfer-engine`** *(data migration & sync-back engine — touches the same ~80 lines of `start_app_transfer` / `start_app_sync_back`)*
+   - **Commit 1 (`F12` + `F8`):** Redirect background subshell FDs (`</dev/null >/dev/null 2>&1`) so `migrate.cgi` returns immediately, avoid block-buffered `tr` progress stalls, add atomic `/tmp/mountfix.lock` mutex, replace fixed `/tmp` filenames with `mktemp`, and emit explicit `DONE`/`ERROR` status markers after `wait`.
+   - **Commit 2 (`F4`):** Switch transfers to `rsync -aHAX --numeric-ids` (after verifying `-A`/`-X` support on the target NAS), unify destination path handling before enabling optional `--delete` mirror mode, and enforce a server-side `pids_using_paths` check rejecting transfers/mounts/unmounts while processes hold the app directory.
+
+3. **Branch 3: `fix/ui-state-and-validation`** *(UI ↔ boot config consistency, responsiveness & JS cleanup)*
+   - **Commit 1 (`F3`):** Update `mount.cgi` so *Mount*/*Unmount* atomically updates `etc/mountfix.conf` and `etc/mounts.list` without requiring a separate *Apply* step, and expose `configured != mounted` mismatch warnings in `validate.cgi` and the ExtJS grid.
+   - **Commit 2 (`F16` + `IDEAS.md` §1):** Suppress duplicate `validate()` firing on initial window open, stop running `validate()` concurrently with *Unmount & Sync-back*, pass single-app `validate(appName)` after per-app actions, and consolidate `du -sh` + `du -sk` into a single `du -sk` pass without full-window modal blocking.
+   - **Commit 3 (`F9` + JS items from `F17`):** Move `maskStack` from prototype to instance, replace uncleaned `setInterval` polling with `beforeclose`-safe `setTimeout` chaining, remove dead `getApps()`/`apps.cgi` calls and debug leftovers (`window.qq`, `console.log`), drop unused POST body in `migrateSelectedApp`, and fix the `taskIcon` path typo.
+
+4. **Branch 4: `chore/lifecycle-and-repo-hygiene`** *(installer hooks, build tooling & repository cleanup)*
+   - **Commit 1 (`F15` + `F10` lifecycle):** Add Entware `PATH` and independent `jq`/`bash`/`rsync` checks in `CONTROL/pre-install.sh`, block package uninstall when bind mounts are active in `CONTROL/pre-uninstall.sh`, and clear pre-selected `docker-ce` from the shipped default `etc/mountfix.conf`.
+   - **Commit 2 (`F10` build + `F11` remainder + repo cleanup):** Stop `build.sh` from dirtying tracked JS/version files on every local build, make `sysctl` writeback tuning an explicit config/UI option, and clean up untracked `tools/` plus merged legacy branches.
 
 ---
 
