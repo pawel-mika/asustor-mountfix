@@ -11,6 +11,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 echo "Test 1: Static safety checks on CONTROL/start-stop.sh..."
 [ -f "$REPO_ROOT/CONTROL/start-stop.sh.old" ] || { echo "FAIL: CONTROL/start-stop.sh.old backup missing"; exit 1; }
 sh -n "$REPO_ROOT/CONTROL/start-stop.sh"
+sh -n "$REPO_ROOT/CONTROL/lib.sh"
 sh -n "$REPO_ROOT/CONTROL/common.sh"
 sh -n "$REPO_ROOT/CONTROL/post-install.sh"
 
@@ -40,7 +41,7 @@ EOF
 
 (
     # shellcheck disable=SC1091
-    . "$REPO_ROOT/CONTROL/common.sh"
+    . "$REPO_ROOT/CONTROL/lib.sh"
     generate_mounts_list "$CFG_DIR/mountfix.conf" "$CFG_DIR/mounts.list"
 )
 
@@ -145,7 +146,7 @@ EOF
 
 MF_LOG="$TMP_DIR/mountfix.log"
 PATH="$MOCK_BIN" \
-    MOUNTFIX_COMMON_SH="$REPO_ROOT/CONTROL/common.sh" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
     MOUNTS_LIST_FILE="$TEST_LIST" \
     CONFIG_FILE="$TMP_DIR/nonexistent.conf" \
     MOUNTFIX_LOG_FILE="$MF_LOG" \
@@ -220,7 +221,7 @@ FAKE_PROC_MOUNTS="$TMP_DIR/proc_mounts"
 : > "$FAKE_PROC_MOUNTS"
 
 PATH="$MOCK_BIN" \
-    MOUNTFIX_COMMON_SH="$REPO_ROOT/CONTROL/common.sh" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
     MOUNTS_LIST_FILE="$TEST_LIST" \
     CONFIG_FILE="$TMP_DIR/nonexistent.conf" \
     MOUNTFIX_LOG_FILE="$MF_LOG" \
@@ -270,7 +271,7 @@ echo "${APP_SRC_1}:${APP_TGT_1}" > "$STATE_FILE"
 echo "${APP_SRC_1}:${APP_TGT_1}" > "$TEST_LIST"
 
 PATH="$MOCK_BIN" \
-    MOUNTFIX_COMMON_SH="$REPO_ROOT/CONTROL/common.sh" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
     MOUNTS_LIST_FILE="$TEST_LIST" \
     CONFIG_FILE="$TMP_DIR/nonexistent.conf" \
     MOUNTFIX_LOG_FILE="$MF_LOG" \
@@ -304,7 +305,7 @@ cat <<'EOF' > "$FAKE_PROC_MOUNTS"
 EOF
 
 PATH="$MOCK_BIN" \
-    MOUNTFIX_COMMON_SH="$REPO_ROOT/CONTROL/common.sh" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
     MOUNTS_LIST_FILE="$TMP_DIR/missing.list" \
     CONFIG_FILE="$TMP_DIR/missing.conf" \
     MOUNTFIX_LOG_FILE="$MF_LOG" \
@@ -334,7 +335,7 @@ echo "Test 7: post-install.sh upgrade generates mounts.list..."
 UPG_TEMP="$TMP_DIR/apkg_temp"
 UPG_PKG="$TMP_DIR/apkg_pkg"
 mkdir -p "$UPG_TEMP/etc" "$UPG_PKG/CONTROL"
-cp "$REPO_ROOT/CONTROL/common.sh" "$UPG_PKG/CONTROL/common.sh"
+cp "$REPO_ROOT/CONTROL/lib.sh" "$UPG_PKG/CONTROL/lib.sh"
 cat <<'EOF' > "$UPG_TEMP/etc/mountfix.conf"
 {"targetVolume":"/volume2","selectedApps":[{"name":"minidlna"}]}
 EOF
@@ -354,7 +355,7 @@ grep -q '^/volume2/AppCentral/minidlna:/volume1/.@plugins/AppCentral/minidlna$' 
 echo "Test 8: save_mountfix_config generates mounts.list alongside mountfix.conf..."
 SAVE_PKG="$TMP_DIR/save_pkg"
 mkdir -p "$SAVE_PKG/CONTROL" "$SAVE_PKG/etc"
-cp "$REPO_ROOT/CONTROL/common.sh" "$SAVE_PKG/CONTROL/common.sh"
+cp "$REPO_ROOT/CONTROL/lib.sh" "$SAVE_PKG/CONTROL/lib.sh"
 (
     # shellcheck disable=SC1091
     . "$REPO_ROOT/webman/scripts/common.sh"

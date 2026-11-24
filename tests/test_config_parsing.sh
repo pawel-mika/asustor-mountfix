@@ -5,24 +5,25 @@ set -e
 echo "Testing etc/mountfix.conf syntax..."
 jq empty etc/mountfix.conf || { echo "FAIL: etc/mountfix.conf is invalid JSON"; exit 1; }
 
-# Test 2: Source CONTROL/common.sh and test get_mount_configs with both formats
+# Test 2: Source CONTROL/lib.sh and test get_mount_configs with both formats
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 TEST_CONF="$TMP_DIR/mountfix.conf"
 
-# Format A: UI format without enabled: true
+# Format A: UI format without enabled: true (also ensures MountFix self-relocation is filtered)
 cat <<EOF > "$TEST_CONF"
 {
   "targetVolume": "/volume2",
   "selectedApps": [
     {"name": "docker-ce"},
+    {"name": "MountFix"},
     {"name": "entware"}
   ]
 }
 EOF
 
-source CONTROL/common.sh
+source CONTROL/lib.sh
 
 RESULT_A=$(CONFIG_FILE="$TEST_CONF" get_mount_configs)
 EXPECTED_A=$'/volume2/AppCentral/docker-ce:/volume1/.@plugins/AppCentral/docker-ce\n/volume2/AppCentral/entware:/volume1/.@plugins/AppCentral/entware'
@@ -55,5 +56,12 @@ if [ "$RESULT_B" != "$EXPECTED_B" ]; then
     exit 1
 fi
 
-echo "PASS: Configuration parsing tests passed."
+# Test 3: Verify CONTROL/common.sh compatibility shim also loads get_mount_configs cleanly
+RESULT_SHIM=$(sh -c '. ./CONTROL/common.sh && CONFIG_FILE="$1" get_mount_configs' _ "$TEST_CONF")
+if [ "$RESULT_SHIM" != "$EXPECTED_B" ]; then
+    echo "FAIL: CONTROL/common.sh compatibility shim failed. Got:"
+    echo "$RESULT_SHIM"
+    exit 1
+fi
 
+echo "PASS: Configuration parsing tests passed."

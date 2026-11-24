@@ -2,14 +2,19 @@
 
 export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/opt/bin:/opt/sbin:/usr/local/AppCentral/entware/opt/bin
 
-DIR_VOL1="${DIR_VOL1:-/volume1}"
-readonly DIR_VOL1
-DIR_PLUGINS="${DIR_PLUGINS:-.@plugins}"
-readonly DIR_PLUGINS
-DIR_APP_CENTRAL="${DIR_APP_CENTRAL:-AppCentral}"
-readonly DIR_APP_CENTRAL
-DIR_MF_PLUGINS="${DIR_MF_PLUGINS:-.@mfplugins}"
-readonly DIR_MF_PLUGINS
+if [ -n "${MOUNTFIX_LIB_SH:-}" ] && [ -f "$MOUNTFIX_LIB_SH" ]; then
+    . "$MOUNTFIX_LIB_SH"
+elif [ -n "${BASH_SOURCE:-}" ] && [ -f "$(dirname "$BASH_SOURCE")/../../CONTROL/lib.sh" ]; then
+    . "$(dirname "$BASH_SOURCE")/../../CONTROL/lib.sh"
+elif [ -f "$(dirname "$0")/../CONTROL/lib.sh" ]; then
+    . "$(dirname "$0")/../CONTROL/lib.sh"
+elif [ -f "./CONTROL/lib.sh" ]; then
+    . "./CONTROL/lib.sh"
+elif [ -f "/usr/local/AppCentral/MountFix/CONTROL/lib.sh" ]; then
+    . /usr/local/AppCentral/MountFix/CONTROL/lib.sh
+elif [ -f "/volume1/.@plugins/AppCentral/MountFix/CONTROL/lib.sh" ]; then
+    . /volume1/.@plugins/AppCentral/MountFix/CONTROL/lib.sh
+fi
 
 ####################################################################
 # Function to get size in human readable format
@@ -50,7 +55,21 @@ get_query_param() {
 # Function to decode URL encoded strings
 ####################################################################
 url_decode() {
-    echo -e "$(echo "$1" | sed 's/+/ /g; s/%\([0-9A-F][0-9A-F]\)/\\x\1/g')"
+    printf '%s' "${1:-}" | awk '
+    BEGIN { hex = "0123456789abcdef" }
+    {
+        gsub(/\+/, " ")
+        out = ""
+        s = $0
+        while (match(s, /%[0-9A-Fa-f][0-9A-Fa-f]/)) {
+            out = out substr(s, 1, RSTART - 1)
+            h = tolower(substr(s, RSTART + 1, 2))
+            v = (index(hex, substr(h, 1, 1)) - 1) * 16 + (index(hex, substr(h, 2, 1)) - 1)
+            out = out sprintf("%c", v)
+            s = substr(s, RSTART + 3)
+        }
+        printf "%s%s", out, s
+    }'
 }
 
 ####################################################################
@@ -125,37 +144,9 @@ save_mountfix_config() {
     mv "$tmp_file" "$config_file"
 
     # Keep jq-free mounts.list in sync for boot/shutdown
-    local ctrl_common
-    for ctrl_common in "$(dirname "$config_dir")/CONTROL/common.sh" "/usr/local/AppCentral/MountFix/CONTROL/common.sh"; do
-        if [ -f "$ctrl_common" ]; then
-            ( . "$ctrl_common" && generate_mounts_list "$config_file" "$config_dir/mounts.list" ) || true
-            break
-        fi
-    done
+    generate_mounts_list "$config_file" "$config_dir/mounts.list" || true
 
     return 0
-}
-
-####################################################################
-# Check if /dev/mdX is an SSD by checking "rotational" param
-####################################################################
-is_ssd() {
-    local md_device=$1  # np. md2
-    # get the first slave device of the md device (e.g., md2 -> sda, sdb, etc.) and check if it's an SSD or HDD
-    local first_slave=$(ls /sys/block/$md_device/slaves | head -n 1)
-
-    if [ -z "$first_slave" ]; then
-        return 1 # no slave found, treat as HDD by default
-    fi
-
-    # check if the first slave device is rotational or not (0 = SSD, 1 = HDD)
-    local rotational=$(cat /sys/block/$first_slave/queue/rotational)
-
-    if [ "$rotational" -eq 0 ]; then
-        return 0 # SSD
-    else
-        return 1 # HDD
-    fi
 }
 
 ####################################################################
@@ -255,66 +246,21 @@ get_volumes_json() {
 # Function to get the list of installed applications in JSON format
 ####################################################################
 get_installed_apps_json() {
-    local json_file="/usr/builtin/etc/appcentral/installed.json"
+    local json_file="${INSTALLED_APPS_JSON:-/usr/builtin/etc/appcentral/installed.json}"
+    local jq_bin
 
     if [ ! -f "$json_file" ]; then
         echo "[]" # return empty array if file does not exist
         return 1
     fi
 
-    jq -c '[.packages[] | {
+    jq_bin=$(find_jq 2>/dev/null || printf 'jq')
+    "$jq_bin" -c '[.packages[] | select(.package != "MountFix") | {
       package: .package,
       name: (if (.name | type) == "object" then (.name["en-US"] // .package) else .name end),
       enabled: .enabled,
       icon: .icon
     }]' "$json_file"
-
-#     jq -c '.packages[] | {package: .package, name: .name, enabled: .enabled, icon: .icon}' "$json_file"
-}
-
-####################################################################
-# Path / validation helpers for bind mounts
-# bind_source = data on target volume (e.g. /volume2/AppCentral/APP)
-# bind_target = ADM plugin path (e.g. /volume1/.@plugins/AppCentral/APP)
-####################################################################
-get_app_plugin_path() {
-    local app_name="$1"
-    echo "$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL/$app_name"
-}
-
-get_app_data_path() {
-    local target_volume="$1"
-    local app_name="$2"
-    echo "${VOLUME_ROOT:-}$target_volume/$DIR_APP_CENTRAL/$app_name"
-}
-
-validate_app_name() {
-    local app_name="$1"
-    [ -n "$app_name" ] || return 1
-    # AppCentral package names only — no path separators / traversal
-    echo "$app_name" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._+-]*$'
-}
-
-validate_target_volume() {
-    local target_volume="$1"
-    echo "$target_volume" | grep -qE '^/volume[0-9]+$'
-}
-
-# Returns 0 if plugin path is bind-mounted to target volume data
-is_app_bind_mounted() {
-    local target_volume="$1"
-    local app_name="$2"
-    local bind_source bind_target src_inode tgt_inode
-
-    bind_source=$(get_app_data_path "$target_volume" "$app_name")
-    bind_target=$(get_app_plugin_path "$app_name")
-
-    [ -d "$bind_source" ] && [ -d "$bind_target" ] || return 1
-
-    src_inode=$(stat -c %d:%i "$bind_source" 2>/dev/null) || return 1
-    tgt_inode=$(stat -c %d:%i "$bind_target" 2>/dev/null) || return 1
-
-    [ "$src_inode" = "$tgt_inode" ]
 }
 
 ####################################################################
@@ -414,7 +360,7 @@ STATUS_FILE="/tmp/mountfix_transfer.status"
 start_app_transfer() {
     local target_volume="$1"
     local app_name="$2"
-    local force="$3"
+    local force="${3:-}"
 
     if ! validate_target_volume "$target_volume"; then
         echo '{"success": false, "error": "Invalid target volume"}'

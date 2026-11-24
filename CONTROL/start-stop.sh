@@ -1,18 +1,22 @@
 #!/bin/sh
 
-# 1. Load common functions (jq-free mounts.list reader + fallback)
-if [ -n "${MOUNTFIX_COMMON_SH:-}" ] && [ -f "$MOUNTFIX_COMMON_SH" ]; then
+# 1. Load shared library (jq-free mounts.list reader + mount/process helpers)
+if [ -n "${MOUNTFIX_LIB_SH:-}" ] && [ -f "$MOUNTFIX_LIB_SH" ]; then
+    . "$MOUNTFIX_LIB_SH"
+elif [ -n "${MOUNTFIX_COMMON_SH:-}" ] && [ -f "$MOUNTFIX_COMMON_SH" ]; then
     . "$MOUNTFIX_COMMON_SH"
-elif [ -f "$(dirname "$0")/common.sh" ]; then
-    . "$(dirname "$0")/common.sh"
-elif [ -f "/volume1/.@plugins/AppCentral/MountFix/CONTROL/common.sh" ]; then
-    . /volume1/.@plugins/AppCentral/MountFix/CONTROL/common.sh
+elif [ -f "$(dirname "$0")/lib.sh" ]; then
+    . "$(dirname "$0")/lib.sh"
+elif [ -f "/usr/local/AppCentral/MountFix/CONTROL/lib.sh" ]; then
+    . /usr/local/AppCentral/MountFix/CONTROL/lib.sh
+elif [ -f "/volume1/.@plugins/AppCentral/MountFix/CONTROL/lib.sh" ]; then
+    . /volume1/.@plugins/AppCentral/MountFix/CONTROL/lib.sh
 fi
 
 LOG_FILE="${MOUNTFIX_LOG_FILE:-/usr/local/AppCentral/MountFix/var/mountfix.log}"
 ADM_SYSLOG_BIN="${ADM_SYSLOG_BIN:-/usr/sbin/syslog}"
-PROC_ROOT="${PROC_ROOT:-/proc}"
-PROC_MOUNTS="${PROC_MOUNTS:-/proc/mounts}"
+: "${PROC_ROOT:=/proc}"
+: "${PROC_MOUNTS:=/proc/mounts}"
 HALT_ACTION_FILE="${HALT_ACTION_FILE:-/var/log/halt-action}"
 KILL_BIN="${KILL_BIN:-kill}"
 STOP_MAX_SECONDS="${STOP_MAX_SECONDS:-12}"
@@ -57,64 +61,11 @@ apply_sysctl_tuning() {
     sysctl -w vm.dirty_expire_centisecs=6000 2>/dev/null || true
 }
 
-is_mounted() {
-    local src="$1"
-    local tgt="$2"
-    if [ -n "$src" ]; then
-        [ -d "$src" ] && [ -d "$tgt" ] || return 1
-        local s_ino t_ino
-        s_ino=$(stat -c %d:%i "$src" 2>/dev/null) || return 1
-        t_ino=$(stat -c %d:%i "$tgt" 2>/dev/null) || return 1
-        [ "$s_ino" = "$t_ino" ]
-        return $?
-    fi
-    awk -v tgt="$tgt" '$2 == tgt { found = 1; exit 0 } END { exit(found ? 0 : 1) }' "$PROC_MOUNTS" 2>/dev/null
-}
-
 is_system_shutdown() {
     [ -f "$HALT_ACTION_FILE" ] || return 1
     local action
     action=$(tr -d ' \t\r\n' < "$HALT_ACTION_FILE" 2>/dev/null)
     [ "$action" = "REBOOT" ] || [ "$action" = "SHUTDOWN" ]
-}
-
-# Print PIDs of processes using anything under any of the given path prefixes
-# (cwd, root, exe, open fds, mmapped files). Never signals or kills processes.
-pids_using_paths() {
-    local p pid hit l t prefix
-    for p in "$PROC_ROOT"/[0-9]*; do
-        [ -d "$p" ] || continue
-        pid=${p##*/}
-        [ "$pid" = "$$" ] && continue
-        hit=0
-        for l in "$p/cwd" "$p/root" "$p/exe" "$p"/fd/*; do
-            t=$(readlink "$l" 2>/dev/null) || continue
-            for prefix in "$@"; do
-                [ -z "$prefix" ] && continue
-                case "$t" in
-                    "$prefix"|"$prefix"/*) hit=1; break 2 ;;
-                esac
-            done
-        done
-        if [ "$hit" -eq 0 ] && [ -r "$p/maps" ]; then
-            for prefix in "$@"; do
-                [ -z "$prefix" ] && continue
-                if awk -v pfx="$prefix" '
-                    NF >= 6 {
-                        path = $6
-                        if (path == pfx || substr(path, 1, length(pfx) + 1) == pfx "/") {
-                            found = 1; exit 0
-                        }
-                    }
-                    END { exit(found ? 0 : 1) }
-                ' "$p/maps" 2>/dev/null; then
-                    hit=1
-                    break
-                fi
-            done
-        fi
-        [ "$hit" -eq 1 ] && echo "$pid"
-    done
 }
 
 format_pids() {
