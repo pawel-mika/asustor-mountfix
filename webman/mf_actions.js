@@ -490,15 +490,16 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 success: function (json) {
                     var result = (json && json.result) || {};
                     var appName = result.app;
+                    var state = result.state;
                     var progress = parseInt(result.progress, 10) || 0;
                     var lastLine = result.lastLine || '';
                     var currentAppName = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
 
-                    // Check for failure indicated in status file
-                    if (lastLine.indexOf('ERROR') !== -1) {
+                    // Check for explicit failure state or ERROR marker in status file
+                    if (state === 'error' || lastLine.indexOf('ERROR') !== -1) {
                         clearInterval(intervalId);
                         page.unmaskAll();
-                        page.updateStatus('Error: ' + lastLine, true);
+                        page.updateStatus('Error: ' + (lastLine || 'Transfer failed'), true);
                         return;
                     }
 
@@ -509,7 +510,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                             page.win.el.mask(statusMsg);
                         }
 
-                        var finished = (progress >= 100 || lastLine.indexOf('Completed') !== -1) && (!currentAppName || appName === currentAppName);
+                        var finished = state === 'done' && (!currentAppName || appName === currentAppName);
                         if (finished) {
                             clearInterval(intervalId);
                             page.unmaskAll();

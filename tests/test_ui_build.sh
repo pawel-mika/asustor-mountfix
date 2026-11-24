@@ -35,11 +35,18 @@ const assert = require('assert');
 let actionsProto = null;
 let nextAjaxResponse = null;
 let createdDialogs = [];
+let intervalCallbacks = [];
+let clearedIntervals = [];
 
 const sandbox = {
     console,
-    setInterval: () => 1,
-    clearInterval: () => {},
+    setInterval: (fn) => {
+        intervalCallbacks.push(fn);
+        return intervalCallbacks.length;
+    },
+    clearInterval: (id) => {
+        clearedIntervals.push(id);
+    },
     window: {},
     AS: {
         ARC: {
@@ -83,9 +90,11 @@ assert(actionsProto, 'MountFix.Actions definition not captured');
 
 function makePage() {
     const statuses = [];
+    const validateCalls = [];
     const page = Object.assign({}, actionsProto, {
         maskStack: [],
         statuses,
+        validateCalls,
         selectedApp: { get: (k) => (k === 'name' ? 'docker-ce' : false) },
         win: {
             el: { mask() {}, unmask() {} },
@@ -97,6 +106,7 @@ function makePage() {
             },
         },
         updateStatus(msg, isErr) { statuses.push({ msg, isErr }); },
+        validate() { validateCalls.push(true); },
     });
     return page;
 }
@@ -142,6 +152,50 @@ p.saveConfig();
 assert.strictEqual(p.maskStack.length, 0);
 assert.strictEqual(p.statuses.at(-1).msg, 'Error: Failed to save config');
 assert.strictEqual(p.statuses.at(-1).isErr, true);
+
+// 6. monitorMigrationStatus: does NOT finish on progress: 100 with state: 'running', finishes only on state: 'done'
+intervalCallbacks = [];
+clearedIntervals = [];
+p = makePage();
+let completedCount = 0;
+p.monitorMigrationStatus('Copying docker-ce', () => { completedCount += 1; });
+assert.strictEqual(intervalCallbacks.length, 1);
+assert.strictEqual(p.maskStack.length, 1);
+
+nextAjaxResponse = {
+    success: true,
+    result: { app: 'docker-ce', state: 'running', progress: 100, lastLine: '5,242,880 100% 10MB/s', pid: 1234 },
+};
+intervalCallbacks[0]();
+assert.strictEqual(clearedIntervals.length, 0, 'must NOT clear interval while state is running even at 100%');
+assert.strictEqual(p.maskStack.length, 1, 'must stay masked while state is running');
+assert.strictEqual(completedCount, 0);
+assert.strictEqual(p.validateCalls.length, 0);
+
+nextAjaxResponse = {
+    success: true,
+    result: { app: 'docker-ce', state: 'done', progress: 100, lastLine: 'DONE | 100% | Completed', pid: null },
+};
+intervalCallbacks[0]();
+assert.strictEqual(clearedIntervals.length, 1, 'must clear interval on state === done');
+assert.strictEqual(p.maskStack.length, 0, 'must unmaskAll on state === done');
+assert.strictEqual(completedCount, 1);
+assert.strictEqual(p.validateCalls.length, 1);
+
+// 7. monitorMigrationStatus: stops polling and surfaces error on state: 'error'
+intervalCallbacks = [];
+clearedIntervals = [];
+p = makePage();
+p.monitorMigrationStatus('Copying docker-ce');
+nextAjaxResponse = {
+    success: true,
+    result: { app: 'docker-ce', state: 'error', progress: 0, lastLine: 'ERROR | Transfer failed (exit code: 23)', pid: null },
+};
+intervalCallbacks[0]();
+assert.strictEqual(clearedIntervals.length, 1, 'must clear interval on state === error');
+assert.strictEqual(p.maskStack.length, 0, 'must unmaskAll on state === error');
+assert.strictEqual(p.statuses.at(-1).isErr, true);
+assert(p.statuses.at(-1).msg.includes('ERROR | Transfer failed'));
 EOF
 fi
 

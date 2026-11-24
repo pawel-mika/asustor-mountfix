@@ -449,13 +449,20 @@ mount_app() {
     esc_source=$(json_escape "$bind_source")
     esc_target=$(json_escape "$bind_target")
 
-    if ! mount --bind "$bind_source" "$bind_target" 2>/tmp/mountfix_mount.err; then
-        local err
-        err=$(tr '\n' ' ' </tmp/mountfix_mount.err)
+    local err_file err
+    err_file=$(mktemp "${TMPDIR:-/tmp}/mountfix_mount.XXXXXX") || {
+        echo '{"success": false, "error": "Failed to create temporary error file"}'
+        return 1
+    }
+
+    if ! mount --bind "$bind_source" "$bind_target" 2>"$err_file"; then
+        err=$(tr '\n' ' ' <"$err_file")
+        rm -f "$err_file"
         err=$(json_escape "$err")
         printf '{"success": false, "error": "mount --bind failed: %s"}\n' "$err"
         return 1
     fi
+    rm -f "$err_file"
 
     printf '{"success": true, "message": "Mounted", "bindSource": "%s", "bindTarget": "%s"}\n' \
         "$esc_source" "$esc_target"
@@ -487,13 +494,20 @@ unmount_app() {
     esc_source=$(json_escape "$bind_source")
     esc_target=$(json_escape "$bind_target")
 
-    if ! umount "$bind_target" 2>/tmp/mountfix_umount.err; then
-        local err
-        err=$(tr '\n' ' ' </tmp/mountfix_umount.err)
+    local err_file err
+    err_file=$(mktemp "${TMPDIR:-/tmp}/mountfix_umount.XXXXXX") || {
+        echo '{"success": false, "error": "Failed to create temporary error file"}'
+        return 1
+    }
+
+    if ! umount "$bind_target" 2>"$err_file"; then
+        err=$(tr '\n' ' ' <"$err_file")
+        rm -f "$err_file"
         err=$(json_escape "$err")
         printf '{"success": false, "error": "umount failed: %s"}\n' "$err"
         return 1
     fi
+    rm -f "$err_file"
 
     printf '{"success": true, "message": "Unmounted", "bindSource": "%s", "bindTarget": "%s"}\n' \
         "$esc_source" "$esc_target"
@@ -501,6 +515,177 @@ unmount_app() {
 }
 
 STATUS_FILE="${STATUS_FILE:-/tmp/mountfix_transfer.status}"
+TRANSFER_LOCK_DIR="${TRANSFER_LOCK_DIR:-/tmp/mountfix.lock}"
+RSYNC_BIN="${RSYNC_BIN:-rsync}"
+
+####################################################################
+# Atomic directory-based transfer mutex with stale-lock recovery
+####################################################################
+acquire_transfer_lock() {
+    local owner_token="${1:-$$}"
+    local lock_pid=""
+
+    if mkdir "$TRANSFER_LOCK_DIR" 2>/dev/null; then
+        printf '%s\n' "$$" > "$TRANSFER_LOCK_DIR/pid" 2>/dev/null || true
+        printf '%s\n' "$owner_token" > "$TRANSFER_LOCK_DIR/owner" 2>/dev/null || true
+        return 0
+    fi
+
+    [ -d "$TRANSFER_LOCK_DIR" ] || return 1
+
+    if [ ! -s "$TRANSFER_LOCK_DIR/pid" ]; then
+        sleep 1
+    fi
+
+    lock_pid=$(tr -d ' \t\r\n' < "$TRANSFER_LOCK_DIR/pid" 2>/dev/null || true)
+    case "$lock_pid" in
+        ''|*[!0-9]*)
+            ;;
+        *)
+            if kill -0 "$lock_pid" 2>/dev/null; then
+                return 1
+            fi
+            ;;
+    esac
+
+    rm -rf "$TRANSFER_LOCK_DIR"
+    if mkdir "$TRANSFER_LOCK_DIR" 2>/dev/null; then
+        printf '%s\n' "$$" > "$TRANSFER_LOCK_DIR/pid" 2>/dev/null || true
+        printf '%s\n' "$owner_token" > "$TRANSFER_LOCK_DIR/owner" 2>/dev/null || true
+        return 0
+    fi
+
+    return 1
+}
+
+release_transfer_lock() {
+    local expected="${1:-}"
+    local cur_owner="" cur_pid=""
+
+    [ -d "$TRANSFER_LOCK_DIR" ] || return 0
+
+    if [ -n "$expected" ]; then
+        cur_owner=$(tr -d '\r\n' < "$TRANSFER_LOCK_DIR/owner" 2>/dev/null || true)
+        cur_pid=$(tr -d ' \t\r\n' < "$TRANSFER_LOCK_DIR/pid" 2>/dev/null || true)
+        if [ "$cur_owner" != "$expected" ] && [ "$cur_pid" != "$expected" ]; then
+            return 0
+        fi
+    fi
+
+    rm -rf "$TRANSFER_LOCK_DIR"
+}
+
+####################################################################
+# Atomic status writer & unbuffered CR->LF progress stream
+####################################################################
+_write_status_atomic() {
+    local app_name="$1"
+    local status_line="$2"
+    local status_dir tmp_status
+
+    status_dir=$(dirname "$STATUS_FILE")
+    [ -d "$status_dir" ] || mkdir -p "$status_dir" 2>/dev/null || true
+    tmp_status=$(mktemp "${status_dir}/.mountfix_status.XXXXXX" 2>/dev/null || printf '%s.tmp.%s' "$STATUS_FILE" "$$")
+    if printf '%s\n%s\n' "$app_name" "$status_line" > "$tmp_status" && mv "$tmp_status" "$STATUS_FILE"; then
+        return 0
+    fi
+    rm -f "$tmp_status"
+    return 1
+}
+
+_stream_rsync_progress() {
+    if command -v stdbuf >/dev/null 2>&1; then
+        stdbuf -oL tr '\r' '\n' | awk '/[^ \t]/ { print; fflush() }'
+    else
+        awk 'BEGIN { RS = "\r" } {
+            n = split($0, lines, "\n")
+            for (i = 1; i <= n; i++) {
+                if (lines[i] ~ /[^ \t]/) {
+                    print lines[i]
+                    fflush()
+                }
+            }
+        }'
+    fi
+}
+
+####################################################################
+# Launch rsync in a fully detached background subshell
+####################################################################
+_launch_rsync_transfer() {
+    local app_name="$1"
+    local src="$2"
+    local dst="$3"
+    local start_msg="$4"
+    local fail_prefix="$5"
+    local rsync_flags="$6"
+    local work_dir lock_token pipe bg_pid
+
+    if ! acquire_transfer_lock "$$"; then
+        echo '{"success": false, "error": "Transfer already in progress"}'
+        return 1
+    fi
+
+    work_dir=$(mktemp -d "${TMPDIR:-/tmp}/mountfix_xfer.XXXXXX") || {
+        release_transfer_lock "$$"
+        echo '{"success": false, "error": "Failed to create transfer temp directory"}'
+        return 1
+    }
+
+    lock_token="$work_dir"
+    printf '%s\n' "$lock_token" > "$TRANSFER_LOCK_DIR/owner" 2>/dev/null || true
+
+    pipe="$work_dir/progress.pipe"
+    if ! mkfifo "$pipe"; then
+        rm -rf "$work_dir"
+        release_transfer_lock "$lock_token"
+        echo '{"success": false, "error": "Failed to create transfer progress pipe"}'
+        return 1
+    fi
+
+    _write_status_atomic "$app_name" "0% | $start_msg" || {
+        rm -rf "$work_dir"
+        release_transfer_lock "$lock_token"
+        echo '{"success": false, "error": "Failed to initialize transfer status"}'
+        return 1
+    }
+
+    (
+        trap '' HUP
+        trap 'rm -rf "$work_dir"; release_transfer_lock "$lock_token"' EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+
+        outbuf_flag=""
+        if "$RSYNC_BIN" --help 2>/dev/null | grep -q -- '--outbuf'; then
+            outbuf_flag="--outbuf=L"
+        fi
+
+        # shellcheck disable=SC2086
+        "$RSYNC_BIN" $rsync_flags $outbuf_flag --info=progress2 "$src" "$dst" > "$pipe" 2>&1 &
+        rsync_pid=$!
+
+        _stream_rsync_progress < "$pipe" >> "$STATUS_FILE"
+
+        wait "$rsync_pid"
+        rsync_status=$?
+
+        if [ "$rsync_status" -eq 0 ]; then
+            _write_status_atomic "$app_name" "DONE | 100% | Completed"
+        else
+            _write_status_atomic "$app_name" "ERROR | ${fail_prefix} (exit code: ${rsync_status})"
+        fi
+    ) </dev/null >/dev/null 2>&1 &
+    bg_pid=$!
+
+    if [ -d "$TRANSFER_LOCK_DIR" ] && [ "$(tr -d '\r\n' < "$TRANSFER_LOCK_DIR/owner" 2>/dev/null || true)" = "$lock_token" ]; then
+        printf '%s\n' "$bg_pid" > "$TRANSFER_LOCK_DIR/pid.tmp.$$" 2>/dev/null && \
+            mv "$TRANSFER_LOCK_DIR/pid.tmp.$$" "$TRANSFER_LOCK_DIR/pid" 2>/dev/null || \
+            rm -f "$TRANSFER_LOCK_DIR/pid.tmp.$$" 2>/dev/null || true
+    fi
+
+    return 0
+}
 
 ####################################################################
 # Function to start background rsync for selected APP (SRC -> DST)
@@ -525,7 +710,6 @@ start_app_transfer() {
         return 1
     fi
 
-    local pipe="/tmp/rsync_progress.pipe"
     local src_vol=$DIR_VOL1
     local src="$src_vol/$DIR_PLUGINS/$DIR_APP_CENTRAL/$app_name"
     local tgt="${VOLUME_ROOT:-}$target_volume/$DIR_APP_CENTRAL"
@@ -537,33 +721,7 @@ start_app_transfer() {
         return 1
     fi
 
-    # prevent starting multiple transfers for the same app at the same time, which could cause conflicts and data corruption
-    if pgrep -f "rsync.*$app_name" > /dev/null; then
-        echo '{"success": false, "error": "Transfer already in progress"}'
-        return 1
-    fi
-
-    echo "$app_name" > "$STATUS_FILE"
-    echo "0% | Starting transfer..." >> "$STATUS_FILE"
-
-    (
-        rm -f "$pipe"
-        mkfifo "$pipe"
-        # -au: archive + update (never overwrite newer destination files)
-        rsync -au --info=progress2 "$src" "$tgt" >> "$pipe" 2>&1 &
-        rsync_pid=$!
-        cat "$pipe" | tr '\r' '\n' >> "$STATUS_FILE"
-        wait "$rsync_pid"
-        rsync_status=$?
-        rm -f "$pipe"
-
-        echo "$app_name" > "$STATUS_FILE"
-        if [ "$rsync_status" -eq 0 ]; then
-            echo "100% | Completed" >> "$STATUS_FILE"
-        else
-            echo "ERROR | Transfer failed (exit code: $rsync_status)" >> "$STATUS_FILE"
-        fi
-    ) & 
+    _launch_rsync_transfer "$app_name" "$src" "$tgt" "Starting transfer..." "Transfer failed" "-au" || return 1
 
     local esc_src esc_tgt
     esc_src=$(json_escape "$src")
@@ -594,7 +752,6 @@ start_app_sync_back() {
         return 1
     fi
 
-    local pipe="/tmp/rsync_syncback_progress.pipe"
     local src="${VOLUME_ROOT:-}$target_volume/$DIR_APP_CENTRAL/$app_name"
     local tgt="$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL/$app_name"
 
@@ -607,32 +764,7 @@ start_app_sync_back() {
         mkdir -p "$tgt"
     fi
 
-    if pgrep -f "rsync.*$app_name" > /dev/null; then
-        echo '{"success": false, "error": "Transfer already in progress"}'
-        return 1
-    fi
-
-    echo "$app_name" > "$STATUS_FILE"
-    echo "0% | Starting sync back..." >> "$STATUS_FILE"
-
-    (
-        rm -f "$pipe"
-        mkfifo "$pipe"
-        # Sync back from SSD ($src/) to HDD ($tgt/) with -au (archive + update, no --delete)
-        rsync -au --info=progress2 "$src/" "$tgt/" >> "$pipe" 2>&1 &
-        rsync_pid=$!
-        cat "$pipe" | tr '\r' '\n' >> "$STATUS_FILE"
-        wait "$rsync_pid"
-        rsync_status=$?
-        rm -f "$pipe"
-
-        echo "$app_name" > "$STATUS_FILE"
-        if [ "$rsync_status" -eq 0 ]; then
-            echo "100% | Completed" >> "$STATUS_FILE"
-        else
-            echo "ERROR | Sync back failed (exit code: $rsync_status)" >> "$STATUS_FILE"
-        fi
-    ) &
+    _launch_rsync_transfer "$app_name" "$src/" "$tgt/" "Starting sync back..." "Sync back failed" "-au" || return 1
 
     local esc_src esc_tgt
     esc_src=$(json_escape "$src")
@@ -645,20 +777,59 @@ start_app_sync_back() {
 ####################################################################
 get_transfer_status_json() {
     if [ ! -f "$STATUS_FILE" ]; then
-        echo '{"progress": 0, "status": "idle"}'
+        echo '{"progress": 0, "state": "idle", "status": "idle", "pid": null}'
         return
     fi
 
-    local first_line last_line percent safe_app safe_last_line
-    first_line=$(head -n 1 "$STATUS_FILE")
-    last_line=$(tail -n 1 "$STATUS_FILE")
+    local first_line last_line percent safe_app safe_last_line state pid_json lock_pid
+    first_line=$(head -n 1 "$STATUS_FILE" 2>/dev/null || true)
+    last_line=$(awk 'NF { line = $0 } END { print line }' "$STATUS_FILE" 2>/dev/null || true)
 
-    percent=$(printf '%s\n' "$last_line" | grep -oE '[0-9]+%' | tr -d '%' | tail -n 1)
-    case "$percent" in
-        ''|*[!0-9]*) percent=0 ;;
+    pid_json="null"
+    if [ -f "$TRANSFER_LOCK_DIR/pid" ]; then
+        lock_pid=$(tr -d ' \t\r\n' < "$TRANSFER_LOCK_DIR/pid" 2>/dev/null || true)
+        case "$lock_pid" in
+            ''|*[!0-9]*) ;;
+            *)
+                if kill -0 "$lock_pid" 2>/dev/null; then
+                    pid_json="$lock_pid"
+                fi
+                ;;
+        esac
+    fi
+
+    case "$last_line" in
+        "DONE |"*)
+            state="done"
+            percent=100
+            ;;
+        "ERROR |"*)
+            state="error"
+            ;;
+        *)
+            state="running"
+            ;;
     esac
+
+    if [ "$state" != "done" ]; then
+        percent=$(printf '%s\n' "$last_line" | awk '
+            {
+                s = $0
+                p = 0
+                while (match(s, /[0-9]+%/)) {
+                    p = substr(s, RSTART, RLENGTH - 1) + 0
+                    s = substr(s, RSTART + RLENGTH)
+                }
+                print p
+            }
+        ')
+        case "$percent" in
+            ''|*[!0-9]*) percent=0 ;;
+        esac
+    fi
 
     safe_app=$(json_escape "$first_line")
     safe_last_line=$(json_escape "$last_line")
-    printf '{"app": "%s", "progress": %s, "lastLine": "%s"}\n' "$safe_app" "$percent" "$safe_last_line"
+    printf '{"app": "%s", "state": "%s", "progress": %s, "lastLine": "%s", "pid": %s}\n' \
+        "$safe_app" "$state" "$percent" "$safe_last_line" "$pid_json"
 }
