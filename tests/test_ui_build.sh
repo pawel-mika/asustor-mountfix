@@ -16,9 +16,12 @@ grep -q "AS.ARC.msgWindow" webman/mountfix.js || { echo "FAIL: AS.ARC.msgWindow 
 # Check that unmount is blocked when app is running
 grep -q "btnUnmount.setDisabled(running || !mounted)" webman/mountfix.js || { echo "FAIL: unmount button must be disabled when running"; exit 1; }
 
-# Ensure no dead console.log('sync back') stub remains
+# Ensure no dead console.log('sync back') stub or stale rsync -au text remains
 if grep -q "console.log('sync back')" webman/mountfix.js; then
     echo "FAIL: console.log('sync back') stub still present"; exit 1
+fi
+if grep -q "rsync -au" webman/mountfix.js; then
+    echo "FAIL: stale 'rsync -au' wording still present in mountfix.js"; exit 1
 fi
 
 # Check that Target Directory Exists prompt helper is present and used on failure/success
@@ -129,10 +132,10 @@ assert.strictEqual(p.maskStack.length, 0);
 assert.strictEqual(p.statuses.at(-1).msg, 'Error: Cannot copy while application is mounted. Unmount it first!');
 assert.strictEqual(p.statuses.at(-1).isErr, true);
 
-// 3. syncBackSelectedApp: failure({success:false, result:{error:'...'}}) surfaces backend error
+// 3. syncBackSelectedApp(null, true): failure({success:false, result:{error:'...'}}) surfaces backend error
 p = makePage();
 nextAjaxResponse = { success: false, result: { success: false, error: 'Target data directory does not exist on SSD' } };
-p.syncBackSelectedApp();
+p.syncBackSelectedApp(null, true);
 assert.strictEqual(p.maskStack.length, 0);
 assert.strictEqual(p.statuses.at(-1).msg, 'Error: Target data directory does not exist on SSD');
 assert.strictEqual(p.statuses.at(-1).isErr, true);
@@ -196,6 +199,57 @@ assert.strictEqual(clearedIntervals.length, 1, 'must clear interval on state ===
 assert.strictEqual(p.maskStack.length, 0, 'must unmaskAll on state === error');
 assert.strictEqual(p.statuses.at(-1).isErr, true);
 assert(p.statuses.at(-1).msg.includes('ERROR | Transfer failed'));
+
+// 8. promptTargetExists explains mirror mode (--delete) without rsync -au
+createdDialogs = [];
+p = makePage();
+p.promptTargetExists('docker-ce', '/volume2');
+assert.strictEqual(createdDialogs.length, 1);
+assert(createdDialogs[0].cfg.asItems[0].value.includes('--delete'));
+assert(!createdDialogs[0].cfg.asItems[0].value.includes('rsync -au'));
+
+// 9. syncBackSelectedApp() without skipConfirm shows mirror-mode confirmation before AJAX
+createdDialogs = [];
+let ajaxCalls = 0;
+const origAjax = sandbox.AS.ARC.ajax;
+sandbox.AS.ARC.ajax = (opts) => {
+    ajaxCalls += 1;
+    origAjax(opts);
+};
+p = makePage();
+nextAjaxResponse = { success: false, result: { success: false, error: 'Blocked by running process' } };
+p.syncBackSelectedApp();
+assert.strictEqual(ajaxCalls, 0, 'syncBackSelectedApp without skipConfirm must wait for confirmation');
+assert.strictEqual(createdDialogs.length, 1);
+assert.strictEqual(createdDialogs[0].cfg.title, 'Sync back: docker-ce');
+assert(createdDialogs[0].cfg.asItems[0].value.includes('--delete'));
+assert(createdDialogs[0].cfg.asItems[0].value.includes('identical to SSD'));
+createdDialogs[0].cfg.fbar[0].handler();
+assert.strictEqual(ajaxCalls, 1, 'confirming Sync back dialog must trigger AJAX');
+assert.strictEqual(p.statuses.at(-1).msg, 'Error: Blocked by running process');
+
+// 10. syncBackSelectedApp(null, true) skips dialog and triggers AJAX immediately
+createdDialogs = [];
+ajaxCalls = 0;
+p = makePage();
+p.syncBackSelectedApp(null, true);
+assert.strictEqual(createdDialogs.length, 0, 'skipConfirm=true must not open a second confirmation dialog');
+assert.strictEqual(ajaxCalls, 1);
+
+// 11. unmountSelectedApp "Unmount & Sync-back" skips duplicate confirmation
+createdDialogs = [];
+ajaxCalls = 0;
+p = makePage();
+p.selectedApp = { get: (k) => (k === 'name' ? 'docker-ce' : false) };
+p.unmountSelectedApp();
+assert.strictEqual(createdDialogs.length, 1, 'unmountSelectedApp opens Unmount dialog');
+assert(createdDialogs[0].cfg.asItems[0].value.includes('--delete'));
+nextAjaxResponse = { success: true, message: 'Unmounted' };
+// Click "Unmount & Sync-back" -> calls bindMountAction('unmount', ..., cb), then cb calls syncBackSelectedApp(null, true)
+createdDialogs[0].cfg.fbar[0].handler();
+assert.strictEqual(createdDialogs.length, 1, 'Unmount & Sync-back must not open a second confirmation dialog');
+assert.strictEqual(ajaxCalls, 2, 'Should have called mount.cgi unmount + migrate.cgi sync_back');
+sandbox.AS.ARC.ajax = origAjax;
 EOF
 fi
 

@@ -37,7 +37,11 @@ wait_for_transfer_done() {
 
 # Test 1: Static checks
 grep -q 'start_app_sync_back()' "$REPO_ROOT/webman/scripts/common.sh" || fail "start_app_sync_back not defined"
-grep -E 'rsync.*-au|_launch_rsync_transfer.*"-au"' "$REPO_ROOT/webman/scripts/common.sh" >/dev/null || fail "rsync in start_app_transfer must use -au"
+if grep -qE -- '(^|[[:space:]])-au([[:space:]]|")|rsync.*-au' "$REPO_ROOT/webman/scripts/common.sh"; then
+    fail "Unsafe rsync -au flag must not remain in webman/scripts/common.sh"
+fi
+grep -q 'detect_rsync_flags()' "$REPO_ROOT/webman/scripts/common.sh" || fail "detect_rsync_flags not defined"
+grep -q 'ensure_app_not_busy()' "$REPO_ROOT/webman/scripts/common.sh" || fail "ensure_app_not_busy not defined"
 grep -q 'target_exists' "$REPO_ROOT/webman/scripts/common.sh" || fail "start_app_transfer must guard against existing target directory without force"
 grep -q 'sync_back' "$REPO_ROOT/webman/migrate.cgi" || fail "migrate.cgi must handle sync_back action"
 
@@ -55,6 +59,8 @@ export DIR_PLUGINS=".@plugins"
 export DIR_APP_CENTRAL="AppCentral"
 export STATUS_FILE="$TMP_DIR/mountfix_transfer.status"
 export TRANSFER_LOCK_DIR="$TMP_DIR/mountfix.lock"
+export PROC_ROOT="$TMP_DIR/empty_proc"
+mkdir -p "$PROC_ROOT"
 
 mkdir -p "$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL/testapp" \
          "$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL/app2" \
@@ -232,7 +238,138 @@ SYNC_ERR_STATUS=$(wait_for_transfer_done 6) || fail "Timed out waiting for faili
 printf '%s\n' "$SYNC_ERR_STATUS" | jq -e '.state == "error" and (.lastLine | contains("ERROR | Sync back failed (exit code: 23)"))' >/dev/null || \
     fail "Expected ERROR status for exit 23 sync_back, got: $SYNC_ERR_STATUS"
 
-# Test 8: JS UI mask safety checks
+# Test 8: detect_rsync_flags capability detection & fallback (F4)
+export RSYNC_BIN="rsync"
+REAL_FLAGS=$(detect_rsync_flags "$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL/testapp" "$TMP_DIR/volume2/AppCentral/testapp")
+case " $REAL_FLAGS " in
+    *" -aH "*|*" --numeric-ids "*) ;;
+    *) fail "detect_rsync_flags missing base flags: [$REAL_FLAGS]" ;;
+esac
+printf '%s\n' "$REAL_FLAGS" | grep -q -- '--numeric-ids' || fail "detect_rsync_flags missing --numeric-ids: [$REAL_FLAGS]"
+if printf '%s\n' "$REAL_FLAGS" | grep -qE -- '(^|[[:space:]])-au([[:space:]]|$)|(^|[[:space:]])-u([[:space:]]|$)'; then
+    fail "detect_rsync_flags must not include -u/-au: [$REAL_FLAGS]"
+fi
+
+MOCK_RSYNC_NO_AX="$TMP_DIR/mock_rsync_no_ax.sh"
+cat <<'EOF' > "$MOCK_RSYNC_NO_AX"
+#!/bin/sh
+for arg in "$@"; do
+    case "$arg" in
+        --version)
+            echo "rsync  version 3.2.0  protocol version 31"
+            echo "Capabilities: 64-bit files, hardlinks, no ACLs, no xattrs"
+            exit 0
+            ;;
+        --help)
+            echo "Usage: rsync ..."
+            exit 0
+            ;;
+    esac
+done
+exit 0
+EOF
+chmod 755 "$MOCK_RSYNC_NO_AX"
+NO_AX_FLAGS=$(RSYNC_BIN="$MOCK_RSYNC_NO_AX" detect_rsync_flags)
+[ "$NO_AX_FLAGS" = "-aH --numeric-ids" ] || fail "Expected fallback '-aH --numeric-ids', got: [$NO_AX_FLAGS]"
+
+# Test 9: Real rsync mirror mode (--delete), hardlinks, mtime override, xattrs & sibling safety (F4)
+REAL_APP_SRC="$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL/realapp"
+REAL_APP_TGT="$TMP_DIR/volume2/AppCentral/realapp"
+SIBLING_HDD="$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL/otherapp"
+SIBLING_SSD="$TMP_DIR/volume2/AppCentral/otherapp"
+mkdir -p "$REAL_APP_SRC" "$REAL_APP_TGT" "$SIBLING_HDD" "$SIBLING_SSD"
+
+echo "keep-hdd" > "$SIBLING_HDD/keep.txt"
+echo "keep-ssd" > "$SIBLING_SSD/keep.txt"
+
+# Missing source directory must fail cleanly
+MISSING_SRC_RES=$(start_app_transfer "/volume2" "nonexistent_app" "1" || true)
+printf '%s\n' "$MISSING_SRC_RES" | jq -e '.success == false and (.error | contains("Source application directory does not exist"))' >/dev/null || \
+    fail "Expected missing source error, got: $MISSING_SRC_RES"
+
+printf 'authoritative-src\n' > "$REAL_APP_SRC/orig.txt"
+ln "$REAL_APP_SRC/orig.txt" "$REAL_APP_SRC/hardlink.txt"
+
+# Target has a newer mtime file (would have been skipped by -u) and an extra stale file (must be deleted by --delete)
+printf 'newer-stale-tgt\n' > "$REAL_APP_SRC/../realapp_tmp_newer"
+printf 'newer-stale-tgt\n' > "$REAL_APP_TGT/orig.txt"
+touch -d '+1 hour' "$REAL_APP_TGT/orig.txt"
+rm -f "$REAL_APP_SRC/../realapp_tmp_newer"
+printf 'extra-on-ssd\n' > "$REAL_APP_TGT/stale_ssd.txt"
+
+XATTR_SUPPORTED=0
+if command -v setfattr >/dev/null 2>&1 && command -v getfattr >/dev/null 2>&1; then
+    if setfattr -n user.mountfix_test -v "v1" "$REAL_APP_SRC/orig.txt" 2>/dev/null; then
+        XATTR_SUPPORTED=1
+    fi
+fi
+
+export RSYNC_BIN="rsync"
+REAL_XFER_RES=$(start_app_transfer "/volume2" "realapp" "1")
+printf '%s\n' "$REAL_XFER_RES" | jq -e --arg tgt "$REAL_APP_TGT" '.success == true and .tgt == $tgt' >/dev/null || \
+    fail "Real rsync start_app_transfer returned unexpected JSON: $REAL_XFER_RES"
+REAL_XFER_DONE=$(wait_for_transfer_done 10) || fail "Timed out waiting for real rsync transfer"
+printf '%s\n' "$REAL_XFER_DONE" | jq -e '.state == "done"' >/dev/null || fail "Real rsync transfer failed: $REAL_XFER_DONE"
+
+[ "$(cat "$REAL_APP_TGT/orig.txt")" = "authoritative-src" ] || fail "Mirror migrate must overwrite newer-mtime target file"
+[ ! -e "$REAL_APP_TGT/stale_ssd.txt" ] || fail "Mirror migrate with force=1 must delete stale_ssd.txt"
+[ "$(stat -c %i "$REAL_APP_TGT/orig.txt")" = "$(stat -c %i "$REAL_APP_TGT/hardlink.txt")" ] || \
+    fail "Hardlink inode mismatch after migrate"
+[ "$(cat "$SIBLING_SSD/keep.txt")" = "keep-ssd" ] || fail "Sibling SSD app was modified during migrate!"
+if [ "$XATTR_SUPPORTED" -eq 1 ]; then
+    getfattr -n user.mountfix_test --only-values "$REAL_APP_TGT/orig.txt" 2>/dev/null | grep -qx 'v1' || \
+        fail "xattr user.mountfix_test lost after migrate"
+fi
+
+# Now mutate SSD copy (delete hardlink, add new file + hardlink, add xattr) and sync_back
+rm -f "$REAL_APP_TGT/hardlink.txt"
+printf 'from-ssd\n' > "$REAL_APP_TGT/ssd_new.txt"
+ln "$REAL_APP_TGT/ssd_new.txt" "$REAL_APP_TGT/ssd_link.txt"
+if [ "$XATTR_SUPPORTED" -eq 1 ]; then
+    setfattr -n user.mountfix_syncback -v "v2" "$REAL_APP_TGT/ssd_new.txt"
+fi
+
+REAL_SYNC_RES=$(start_app_sync_back "/volume2" "realapp")
+printf '%s\n' "$REAL_SYNC_RES" | jq -e '.success == true' >/dev/null || fail "Real rsync sync_back failed: $REAL_SYNC_RES"
+REAL_SYNC_DONE=$(wait_for_transfer_done 10) || fail "Timed out waiting for real rsync sync_back"
+printf '%s\n' "$REAL_SYNC_DONE" | jq -e '.state == "done"' >/dev/null || fail "Real rsync sync_back failed: $REAL_SYNC_DONE"
+
+[ ! -e "$REAL_APP_SRC/hardlink.txt" ] || fail "sync_back mirror mode must delete file removed on SSD"
+[ "$(cat "$REAL_APP_SRC/ssd_new.txt")" = "from-ssd" ] || fail "sync_back did not copy new file from SSD"
+[ "$(stat -c %i "$REAL_APP_SRC/ssd_new.txt")" = "$(stat -c %i "$REAL_APP_SRC/ssd_link.txt")" ] || \
+    fail "Hardlink inode mismatch after sync_back"
+[ "$(cat "$SIBLING_HDD/keep.txt")" = "keep-hdd" ] || fail "Sibling HDD app was modified during sync_back!"
+if [ "$XATTR_SUPPORTED" -eq 1 ]; then
+    getfattr -n user.mountfix_syncback --only-values "$REAL_APP_SRC/ssd_new.txt" 2>/dev/null | grep -qx 'v2' || \
+        fail "xattr user.mountfix_syncback lost after sync_back"
+fi
+
+# Test 10: Server-side pids_using_paths guard blocks mount, unmount, transfer, and sync_back (F4)
+export PROC_ROOT="/proc"
+BUSY_SRC="$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL/busyapp"
+BUSY_TGT="$TMP_DIR/volume2/AppCentral/busyapp"
+mkdir -p "$BUSY_SRC" "$BUSY_TGT"
+( cd "$BUSY_SRC" && exec sleep 30 ) &
+BUSY_PID=$!
+PIDS_TO_CLEAN+=("$BUSY_PID")
+sleep 0.2
+
+for op_res in \
+    "$(start_app_transfer "/volume2" "busyapp" "1" || true)" \
+    "$(start_app_sync_back "/volume2" "busyapp" || true)" \
+    "$(mount_app "/volume2" "busyapp" || true)" \
+    "$(unmount_app "/volume2" "busyapp" || true)"
+do
+    printf '%s\n' "$op_res" | jq -e --arg pid "$BUSY_PID" \
+        '.success == false and (.error | contains("Application is in use by running process(es):")) and (.error | contains($pid))' >/dev/null || \
+        fail "Expected busy-process guard rejection with PID $BUSY_PID, got: $op_res"
+done
+
+kill "$BUSY_PID" 2>/dev/null || true
+wait "$BUSY_PID" 2>/dev/null || true
+ensure_app_not_busy "/volume2" "busyapp" >/dev/null || fail "ensure_app_not_busy failed after busy process exited"
+
+# Test 11: JS UI mask safety checks
 grep -q 'unmaskAll' "$REPO_ROOT/webman/mf_actions.js" || fail "unmaskAll missing from mf_actions.js"
 grep -q 'btnUnmount.setDisabled(running || !mounted)' "$REPO_ROOT/webman/mf_actions.js" || fail "Unmount button must be disabled when app is running"
 

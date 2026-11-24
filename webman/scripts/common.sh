@@ -443,6 +443,7 @@ mount_app() {
         echo '{"success": false, "error": "Invalid app name"}'
         return 1
     fi
+    ensure_app_not_busy "$target_volume" "$app_name" || return 1
 
     bind_source=$(get_app_data_path "$target_volume" "$app_name")
     bind_target=$(get_app_plugin_path "$app_name")
@@ -488,6 +489,7 @@ unmount_app() {
         echo '{"success": false, "error": "Invalid app name"}'
         return 1
     fi
+    ensure_app_not_busy "$target_volume" "$app_name" || return 1
 
     bind_source=$(get_app_data_path "$target_volume" "$app_name")
     bind_target=$(get_app_plugin_path "$app_name")
@@ -610,6 +612,61 @@ _stream_rsync_progress() {
 }
 
 ####################################################################
+# Server-side guard: reject operations while processes use app paths
+####################################################################
+ensure_app_not_busy() {
+    local target_volume="$1"
+    local app_name="$2"
+    local plugin_path data_path busy_pids busy_fmt esc_pids
+
+    plugin_path=$(get_app_plugin_path "$app_name")
+    data_path=$(get_app_data_path "$target_volume" "$app_name")
+    busy_pids=$(pids_using_paths "$plugin_path" "$data_path" 2>/dev/null || true)
+
+    if [ -n "$busy_pids" ]; then
+        busy_fmt=$(printf '%s\n' "$busy_pids" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        esc_pids=$(json_escape "$busy_fmt")
+        printf '{"success": false, "error": "Application is in use by running process(es): %s. Stop it first."}\n' "$esc_pids"
+        return 1
+    fi
+    return 0
+}
+
+####################################################################
+# Detect safe rsync flags (-aH --numeric-ids plus -A/-X/--outbuf=L)
+####################################################################
+detect_rsync_flags() {
+    local src_probe="${1:-}"
+    local dst_probe="${2:-}"
+    local flags="-aH --numeric-ids"
+    local ver_out help_out cap_spec cap_name cap_flag
+
+    ver_out=$("$RSYNC_BIN" --version 2>/dev/null || true)
+    help_out=$("$RSYNC_BIN" --help 2>/dev/null || true)
+
+    for cap_spec in "ACLs:-A" "xattrs:-X"; do
+        cap_name="${cap_spec%%:*}"
+        cap_flag="${cap_spec#*:}"
+        if printf '%s\n' "$ver_out" | grep -qE "(^|[,[:space:]])${cap_name}([,[:space:]]|\$)" && \
+           ! printf '%s\n' "$ver_out" | grep -q "no ${cap_name}"; then
+            if [ -n "$src_probe" ] && [ -n "$dst_probe" ] && [ -d "$src_probe" ] && [ -d "$dst_probe" ]; then
+                if "$RSYNC_BIN" --dry-run -d "$cap_flag" --exclude='/*' "${src_probe%/}/" "${dst_probe%/}/" >/dev/null 2>&1; then
+                    flags="$flags $cap_flag"
+                fi
+            else
+                flags="$flags $cap_flag"
+            fi
+        fi
+    done
+
+    if printf '%s\n' "$help_out" | grep -q -- '--outbuf'; then
+        flags="$flags --outbuf=L"
+    fi
+
+    printf '%s\n' "$flags"
+}
+
+####################################################################
 # Launch rsync in a fully detached background subshell
 ####################################################################
 _launch_rsync_transfer() {
@@ -618,7 +675,7 @@ _launch_rsync_transfer() {
     local dst="$3"
     local start_msg="$4"
     local fail_prefix="$5"
-    local rsync_flags="$6"
+    local extra_flags="${6:-}"
     local work_dir lock_token pipe bg_pid
 
     if ! acquire_transfer_lock "$$"; then
@@ -656,13 +713,10 @@ _launch_rsync_transfer() {
         trap 'exit 130' INT
         trap 'exit 143' TERM
 
-        outbuf_flag=""
-        if "$RSYNC_BIN" --help 2>/dev/null | grep -q -- '--outbuf'; then
-            outbuf_flag="--outbuf=L"
-        fi
+        base_flags=$(detect_rsync_flags "$src" "$dst")
 
         # shellcheck disable=SC2086
-        "$RSYNC_BIN" $rsync_flags $outbuf_flag --info=progress2 "$src" "$dst" > "$pipe" 2>&1 &
+        "$RSYNC_BIN" $base_flags $extra_flags --info=progress2 "$src" "$dst" > "$pipe" 2>&1 &
         rsync_pid=$!
 
         _stream_rsync_progress < "$pipe" >> "$STATUS_FILE"
@@ -710,10 +764,17 @@ start_app_transfer() {
         return 1
     fi
 
+    ensure_app_not_busy "$target_volume" "$app_name" || return 1
+
     local src_vol=$DIR_VOL1
     local src="$src_vol/$DIR_PLUGINS/$DIR_APP_CENTRAL/$app_name"
     local tgt="${VOLUME_ROOT:-}$target_volume/$DIR_APP_CENTRAL"
     local tgt_app="$tgt/$app_name"
+
+    if [ ! -d "$src" ]; then
+        echo '{"success": false, "error": "Source application directory does not exist"}'
+        return 1
+    fi
 
     # Safety check: if target directory already exists and contains files, and force is not "1"
     if [ "$force" != "1" ] && [ -d "$tgt_app" ] && [ "$(ls -A "$tgt_app" 2>/dev/null)" ]; then
@@ -721,11 +782,23 @@ start_app_transfer() {
         return 1
     fi
 
-    _launch_rsync_transfer "$app_name" "$src" "$tgt" "Starting transfer..." "Transfer failed" "-au" || return 1
+    if [ ! -d "$tgt_app" ]; then
+        mkdir -p "$tgt_app" || {
+            echo '{"success": false, "error": "Failed to create target application directory"}'
+            return 1
+        }
+    fi
+
+    local extra_flags=""
+    if [ "$force" = "1" ]; then
+        extra_flags="--delete"
+    fi
+
+    _launch_rsync_transfer "$app_name" "$src/" "$tgt_app/" "Starting transfer..." "Transfer failed" "$extra_flags" || return 1
 
     local esc_src esc_tgt
     esc_src=$(json_escape "$src")
-    esc_tgt=$(json_escape "$tgt")
+    esc_tgt=$(json_escape "$tgt_app")
     printf '{"success": true, "message": "Transfer started in background", "src": "%s", "tgt": "%s"}\n' "$esc_src" "$esc_tgt"
 }
 
@@ -752,6 +825,8 @@ start_app_sync_back() {
         return 1
     fi
 
+    ensure_app_not_busy "$target_volume" "$app_name" || return 1
+
     local src="${VOLUME_ROOT:-}$target_volume/$DIR_APP_CENTRAL/$app_name"
     local tgt="$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL/$app_name"
 
@@ -761,10 +836,13 @@ start_app_sync_back() {
     fi
 
     if [ ! -d "$tgt" ]; then
-        mkdir -p "$tgt"
+        mkdir -p "$tgt" || {
+            echo '{"success": false, "error": "Failed to create source application directory"}'
+            return 1
+        }
     fi
 
-    _launch_rsync_transfer "$app_name" "$src/" "$tgt/" "Starting sync back..." "Sync back failed" "-au" || return 1
+    _launch_rsync_transfer "$app_name" "$src/" "$tgt/" "Starting sync back..." "Sync back failed" "--delete" || return 1
 
     local esc_src esc_tgt
     esc_src=$(json_escape "$src")

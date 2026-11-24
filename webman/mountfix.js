@@ -221,7 +221,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                             '</b> on volume <b>' +
                             Ext.String.htmlEncode(target) +
                             '</b> already contains data.<br><br>' +
-                            'Are you sure you want to continue copying? (Safe update mode <code>rsync -au</code> will be used, preserving newer files on SSD).' +
+                            'Are you sure you want to continue? Mirror mode (<code>--delete</code>) will overwrite files and remove any extra files on the target volume so it becomes an exact copy of the source.' +
                             '</div>',
                     },
                 ],
@@ -249,7 +249,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                     Ext.String.htmlEncode(app) +
                     ' on volume ' +
                     Ext.String.htmlEncode(target) +
-                    ' already contains data.<br><br>Are you sure you want to continue copying? (Safe update mode rsync -au will be used, preserving newer files on SSD).',
+                    ' already contains data.<br><br>Are you sure you want to continue? Mirror mode (--delete) will overwrite files and remove extra files on the target volume so it becomes an exact copy of the source.',
                 function (btn) {
                     if (btn === 'yes') {
                         page.migrateSelectedApp(true);
@@ -308,7 +308,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         });
     },
 
-    syncBackSelectedApp: function (callbackOnComplete) {
+    syncBackSelectedApp: function (callbackOnComplete, skipConfirm) {
         var page = this;
         var target = page.getSelectedVolume();
         var app = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
@@ -318,28 +318,92 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             return;
         }
 
-        var actionMsg = 'Syncing back ' + app + '...';
-        page.maskWindow(actionMsg);
+        var startSyncBack = function () {
+            var actionMsg = 'Syncing back ' + app + '...';
+            page.maskWindow(actionMsg);
 
-        AS.ARC.ajax({
-            url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'sync_back', target: target, app: app }),
-            method: 'GET',
-            success: function (json) {
-                var res = (json && json.result) || {};
-                if (json && json.success && (res.success || res.success === undefined)) {
+            AS.ARC.ajax({
+                url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'sync_back', target: target, app: app }),
+                method: 'GET',
+                success: function (json) {
+                    var res = (json && json.result) || {};
+                    if (json && json.success && (res.success || res.success === undefined)) {
+                        page.unmaskWindow(actionMsg);
+                        page.updateStatus('Started sync-back for ' + app, false);
+                        page.monitorMigrationStatus('Sync-back ' + app, callbackOnComplete);
+                    } else {
+                        page.unmaskWindow(actionMsg);
+                        page.updateStatus('Error: ' + (res.error || (json && json.error) || 'Failed to start sync back'), true);
+                    }
+                },
+                failure: function (json) {
                     page.unmaskWindow(actionMsg);
-                    page.updateStatus('Started sync-back for ' + app, false);
-                    page.monitorMigrationStatus('Sync-back ' + app, callbackOnComplete);
-                } else {
-                    page.unmaskWindow(actionMsg);
-                    page.updateStatus('Error: ' + (res.error || (json && json.error) || 'Failed to start sync back'), true);
-                }
-            },
-            failure: function (json) {
-                page.unmaskWindow(actionMsg);
-                page.updateStatus('Error: ' + ((json && json.result && json.result.error) || (json && json.error) || 'Unable to start sync back'), true);
-            },
-        });
+                    page.updateStatus('Error: ' + ((json && json.result && json.result.error) || (json && json.error) || 'Unable to start sync back'), true);
+                },
+            });
+        };
+
+        if (skipConfirm) {
+            startSyncBack();
+            return;
+        }
+
+        if (Ext.ClassManager && Ext.ClassManager.isCreated('AS.ARC.msgWindow')) {
+            var confirmDlg = Ext.create('AS.ARC.msgWindow', {
+                parentWin: page.win,
+                title: 'Sync back: ' + app,
+                width: 500,
+                height: 220,
+                iconType: 'warning',
+                asItems: [
+                    {
+                        xtype: 'displayfield',
+                        value:
+                            '<div style="font-size: 13px; font-weight: bold; margin-bottom: 8px;">' +
+                            'Mirror SSD data back to source volume?' +
+                            '</div>' +
+                            '<div style="font-size: 12px; line-height: 18px;">' +
+                            'Sync-back for <b>' +
+                            Ext.String.htmlEncode(app) +
+                            '</b> from <b>' +
+                            Ext.String.htmlEncode(target) +
+                            '</b> runs in mirror mode (<code>--delete</code>).<br><br>' +
+                            'The source copy on HDD will be made identical to SSD (files deleted on SSD will also be removed from HDD).' +
+                            '</div>',
+                    },
+                ],
+                fbar: [
+                    {
+                        text: 'Sync back',
+                        handler: function () {
+                            confirmDlg.close();
+                            startSyncBack();
+                        },
+                    },
+                    {
+                        text: 'Cancel',
+                        handler: function () {
+                            confirmDlg.close();
+                        },
+                    },
+                ],
+            });
+            confirmDlg.show();
+        } else {
+            Ext.Msg.confirm(
+                'Sync back: ' + app,
+                'Sync-back for ' +
+                    Ext.String.htmlEncode(app) +
+                    ' from ' +
+                    Ext.String.htmlEncode(target) +
+                    ' runs in mirror mode (--delete).<br><br>The HDD copy will be made identical to SSD (files deleted on SSD will also be removed from HDD). Continue?',
+                function (btn) {
+                    if (btn === 'yes') {
+                        startSyncBack();
+                    }
+                },
+            );
+        }
     },
 
     mountSelectedApp: function () {
@@ -363,9 +427,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         }
 
         var onUnmountWithSyncBack = function () {
-            // Unmount first, and only on successful unmount trigger sync-back
+            // Unmount first, and only on successful unmount trigger sync-back (skip second confirm)
             page.bindMountAction('unmount', 'Unmounting ' + app + '...', 'Unmounted ' + app + ' successfully', function () {
-                page.syncBackSelectedApp();
+                page.syncBackSelectedApp(null, true);
             });
         };
 
@@ -378,7 +442,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 parentWin: page.win,
                 title: 'Unmount: ' + app,
                 width: 500,
-                height: 220,
+                height: 230,
                 iconType: 'question',
                 asItems: [
                     {
@@ -388,7 +452,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                             '</div>' +
                             '<div style="font-size: 12px; line-height: 18px;">' +
                             'Application <b>' + Ext.String.htmlEncode(app) + '</b> will be unmounted from the target volume.<br><br>' +
-                            '<b>Recommendation:</b> Unmount first, then perform Sync-back to copy latest data from SSD back to source disk (HDD).' +
+                            '<b>Recommendation:</b> Unmount first, then perform Sync-back to mirror latest data from SSD back to HDD (<code>--delete</code>: HDD copy will become identical to SSD).' +
                             '</div>'
                     }
                 ],
@@ -419,7 +483,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         } else {
             Ext.Msg.show({
                 title: 'Unmount: ' + app,
-                msg: 'Application <b>' + Ext.String.htmlEncode(app) + '</b> will be unmounted from the target volume.<br><br>Do you want to perform Sync-back after unmounting?',
+                msg: 'Application <b>' + Ext.String.htmlEncode(app) + '</b> will be unmounted from the target volume.<br><br>Do you want to perform Sync-back after unmounting? (Mirror mode --delete: HDD copy will become identical to SSD.)',
                 buttons: Ext.Msg.YESNOCANCEL,
                 buttonText: {
                     yes: 'Unmount & Sync-back',
