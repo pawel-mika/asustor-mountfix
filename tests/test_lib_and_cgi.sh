@@ -13,7 +13,7 @@ fail() {
 # ---------------------------------------------------------------------------
 # 1. POSIX sh syntax checks across shared library, CONTROL scripts & webman
 # ---------------------------------------------------------------------------
-echo "Test 1: POSIX sh -n syntax checks..."
+echo "Test 1: POSIX sh -n syntax, shebang, and executable mode checks..."
 for script in \
     "$REPO_ROOT/CONTROL/lib.sh" \
     "$REPO_ROOT/CONTROL/common.sh" \
@@ -22,6 +22,20 @@ for script in \
     "$REPO_ROOT/webman/scripts/common.sh"
 do
     sh -n "$script" || fail "Syntax check failed for $script"
+done
+
+CGI_LIST=(
+    "$REPO_ROOT/webman/apps.cgi"
+    "$REPO_ROOT/webman/config.cgi"
+    "$REPO_ROOT/webman/migrate.cgi"
+    "$REPO_ROOT/webman/mount.cgi"
+    "$REPO_ROOT/webman/validate.cgi"
+)
+for cgi in "${CGI_LIST[@]}"; do
+    [ -x "$cgi" ] || fail "CGI is not executable (expected 0755): $cgi"
+    head_line=$(head -n 1 "$cgi")
+    [ "$head_line" = "#!/bin/sh" ] || fail "Expected #!/bin/sh shebang in $cgi, got [$head_line]"
+    sh -n "$cgi" || fail "Syntax check failed for $cgi"
 done
 
 # Ensure dead helpers/constants were removed from webman/scripts/common.sh
@@ -226,4 +240,269 @@ EXPECTED_PKGS=$'docker-ce\nentware'
 ENTWARE_NAME=$(printf '%s\n' "$APPS_OUT" | jq -r '.[] | select(.package == "entware") | .name')
 [ "$ENTWARE_NAME" = "Entware" ] || fail "Localized app name resolution failed: [$ENTWARE_NAME]"
 
-echo "PASS: All shared library, F14 protection, url_decode, and JSON helper tests passed."
+# ---------------------------------------------------------------------------
+# 7. save_mountfix_config strict validation, normalization & backup hygiene (F5)
+# ---------------------------------------------------------------------------
+echo "Test 7: save_mountfix_config validation, normalization, and backup hygiene..."
+SAVE_ENV="$TMP_DIR/save_env"
+SAVE_ETC="$SAVE_ENV/etc"
+SAVE_VOL1="$SAVE_ENV/vol1"
+mkdir -p "$SAVE_ETC" \
+    "$SAVE_VOL1/.@plugins/AppCentral/docker-ce" \
+    "$SAVE_VOL1/.@plugins/AppCentral/entware" \
+    "$SAVE_VOL1/.@plugins/AppCentral/MountFix"
+
+printf '{"targetVolume":"/volume2","selectedApps":[{"name":"entware"}]}\n' > "$SAVE_ETC/mountfix.conf"
+
+(
+    export DIR_VOL1="$SAVE_VOL1"
+    export MF_CONFIG_DIR="$SAVE_ETC"
+    # shellcheck disable=SC1091
+    . "$REPO_ROOT/webman/scripts/common.sh"
+
+    for bad_payload in \
+        '{invalid json' \
+        '["not-an-object"]' \
+        '{}' \
+        '{"targetVolume":123,"selectedApps":[]}' \
+        '{"targetVolume":"/volume2/../etc","selectedApps":[]}' \
+        '{"targetVolume":"/volume2","selectedApps":"not-array"}' \
+        '{"targetVolume":"/volume2","selectedApps":[{"name":""}]}' \
+        '{"targetVolume":"/volume2","selectedApps":[{"name":"MountFix"}]}' \
+        '{"targetVolume":"/volume2","selectedApps":[{"name":"../evil"}]}' \
+        '{"targetVolume":"/volume2","selectedApps":[{"name":"ghost-app"}]}'
+    do
+        if save_mountfix_config "$bad_payload" 2>/dev/null; then
+            fail "save_mountfix_config unexpectedly accepted payload: $bad_payload"
+        fi
+    done
+)
+
+# Ensure rejected payloads created zero backups and did not modify existing mountfix.conf
+if ls "$SAVE_ETC"/mountfix.conf.bak_* >/dev/null 2>&1; then
+    fail "Rejected payloads must not create backup files"
+fi
+[ "$(jq -r '.selectedApps[0].name' "$SAVE_ETC/mountfix.conf")" = "entware" ] || \
+    fail "Rejected payloads mutated existing mountfix.conf"
+
+# Accept valid config, strip extra keys, preserve enabled:false only, and sync mounts.list
+(
+    export DIR_VOL1="$SAVE_VOL1"
+    export MF_CONFIG_DIR="$SAVE_ETC"
+    # shellcheck disable=SC1091
+    . "$REPO_ROOT/webman/scripts/common.sh"
+
+    save_mountfix_config '{"targetVolume":"/volume2","extraTop":"ignored","selectedApps":[{"name":"docker-ce","enabled":true,"extraField":123},{"name":"entware","enabled":false,"junk":"x"}]}' || \
+        fail "Valid config rejected by save_mountfix_config"
+)
+
+ls "$SAVE_ETC"/mountfix.conf.bak_* >/dev/null 2>&1 || fail "Expected backup after valid save_mountfix_config"
+jq -e '. == {"targetVolume":"/volume2","selectedApps":[{"name":"docker-ce"},{"name":"entware","enabled":false}]}' "$SAVE_ETC/mountfix.conf" >/dev/null || \
+    fail "Normalized mountfix.conf mismatch: $(cat "$SAVE_ETC/mountfix.conf")"
+grep -qxF "/volume2/AppCentral/docker-ce:$SAVE_VOL1/.@plugins/AppCentral/docker-ce" "$SAVE_ETC/mounts.list" || \
+    fail "mounts.list mismatch after save_mountfix_config: $(cat "$SAVE_ETC/mounts.list")"
+
+# Empty targetVolume "" clears mounts.list cleanly
+(
+    export DIR_VOL1="$SAVE_VOL1"
+    export MF_CONFIG_DIR="$SAVE_ETC"
+    # shellcheck disable=SC1091
+    . "$REPO_ROOT/webman/scripts/common.sh"
+
+    save_mountfix_config '{"targetVolume":"","selectedApps":[]}' || \
+        fail "Empty targetVolume config rejected by save_mountfix_config"
+)
+[ -f "$SAVE_ETC/mounts.list" ] && [ ! -s "$SAVE_ETC/mounts.list" ] || \
+    fail "Expected empty mounts.list after saving empty targetVolume"
+
+# ---------------------------------------------------------------------------
+# 8. ADM session auth, HTTP headers, and unknown act across all 5 CGIs (F5, F7)
+# ---------------------------------------------------------------------------
+echo "Test 8: ADM session authentication & unified JSON responses across all 5 CGIs..."
+CGI_ENV="$TMP_DIR/cgi_env"
+CGI_VOL1="$CGI_ENV/vol1"
+CGI_VOL_ROOT="$CGI_ENV/volumes"
+CGI_ETC="$CGI_ENV/etc"
+AUTH_CALL_LOG="$CGI_ENV/auth_calls.log"
+MOCK_ADM_AUTH="$CGI_ENV/mock_admin.cgi"
+
+mkdir -p \
+    "$CGI_VOL1/.@plugins/AppCentral/MountFix" \
+    "$CGI_VOL1/.@plugins/AppCentral/docker-ce" \
+    "$CGI_VOL1/.@plugins/AppCentral/entware" \
+    "$CGI_VOL_ROOT/volume2/AppCentral/docker-ce" \
+    "$CGI_ETC"
+printf 'hello-src\n' > "$CGI_VOL1/.@plugins/AppCentral/docker-ce/data.txt"
+printf 'hello-tgt\n' > "$CGI_VOL_ROOT/volume2/AppCentral/docker-ce/data.txt"
+printf '{"targetVolume":"/volume2","selectedApps":[{"name":"docker-ce"}]}\n' > "$CGI_ETC/mountfix.conf"
+
+cat <<EOF > "$MOCK_ADM_AUTH"
+#!/bin/sh
+echo "\$QUERY_STRING" >> "$AUTH_CALL_LOG"
+printf 'Content-Type: application/json\r\n\r\n'
+if [ "\$QUERY_STRING" = "sid=valid_admin_sid-1.0~ok" ]; then
+    echo '{ "success": true }'
+else
+    echo '{ "success": false, "error_code": 5000 }'
+fi
+EOF
+chmod 755 "$MOCK_ADM_AUTH"
+
+run_cgi() {
+    local cgi_path="$1"
+    local qs="$2"
+    local auth_bin="${3:-$MOCK_ADM_AUTH}"
+    local stdin_data="${4:-}"
+
+    printf '%s' "$stdin_data" | \
+        QUERY_STRING="$qs" \
+        ADM_AUTH_CGI="$auth_bin" \
+        MOUNTFIX_WEBMAN_COMMON_SH="$REPO_ROOT/webman/scripts/common.sh" \
+        MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
+        INSTALLED_APPS_JSON="$INSTALLED_FIXTURE" \
+        DIR_VOL1="$CGI_VOL1" \
+        VOLUME_ROOT="$CGI_VOL_ROOT" \
+        CONFIG_FILE="$CGI_ETC/mountfix.conf" \
+        MF_CONFIG_DIR="$CGI_ETC" \
+        STATUS_FILE="$CGI_ENV/transfer.status" \
+        sh "$cgi_path"
+}
+
+assert_cgi_json() {
+    local raw="$1"
+    local label="$2"
+    local header body
+
+    header=$(printf '%s' "$raw" | awk 'BEGIN{RS="\r\n\r\n"} NR==1{print; exit}')
+    [ "$header" = "Content-Type: application/json" ] || \
+        fail "$label: expected Content-Type: application/json\\r\\n\\r\\n header, got [$header] in [$raw]"
+
+    body=$(printf '%s' "$raw" | awk 'BEGIN{RS="\r\n\r\n"} NR==2{print; exit}')
+    [ -n "$body" ] || fail "$label: empty HTTP response body"
+    printf '%s\n' "$body" | jq empty >/dev/null 2>&1 || \
+        fail "$label: invalid JSON body: [$body]"
+    printf '%s\n' "$body"
+}
+
+for cgi in "${CGI_LIST[@]}"; do
+    cgi_name=$(basename "$cgi")
+
+    # 8a. Missing sid -> rejected before calling ADM_AUTH_CGI
+    : > "$AUTH_CALL_LOG"
+    raw_missing=$(run_cgi "$cgi" "act=get")
+    body_missing=$(assert_cgi_json "$raw_missing" "$cgi_name missing sid")
+    [ ! -s "$AUTH_CALL_LOG" ] || fail "$cgi_name called ADM_AUTH_CGI with missing sid"
+    jq -e '.success == false and (.error | startswith("Unauthorized"))' >/dev/null <<<"$body_missing" || \
+        fail "$cgi_name missing sid unexpected body: $body_missing"
+
+    # 8b. Malformed sid (bad chars / parameter pollution / injected =) -> rejected BEFORE ADM_AUTH_CGI
+    for bad_qs in "act=get&sid=bad=hack" "act=get&sid=bad!hack" "act=get&sid=bad;id" "act=get&sid=valid_admin_sid-1.0~ok&sid=second" "sid=bad space&act=get" 'act=get&sid=bad"quote'; do
+        : > "$AUTH_CALL_LOG"
+        raw_malformed=$(run_cgi "$cgi" "$bad_qs")
+        body_malformed=$(assert_cgi_json "$raw_malformed" "$cgi_name malformed sid ($bad_qs)")
+        [ ! -s "$AUTH_CALL_LOG" ] || fail "$cgi_name called ADM_AUTH_CGI on malformed sid ($bad_qs)"
+        jq -e '.success == false and (.error | startswith("Unauthorized"))' >/dev/null <<<"$body_malformed" || \
+            fail "$cgi_name malformed sid unexpected body: $body_malformed"
+    done
+    # Also verify raw unsplit sid containing '&' if passed via encoded '=' or malformed value is rejected
+    : > "$AUTH_CALL_LOG"
+    raw_verifier_missing=$(run_cgi "$cgi" "act=get&sid=valid_admin_sid-1.0~ok" "$CGI_ENV/missing_verifier.cgi")
+    body_verifier_missing=$(assert_cgi_json "$raw_verifier_missing" "$cgi_name missing verifier")
+    jq -e '.success == false and (.error | contains("verifier unavailable"))' >/dev/null <<<"$body_verifier_missing" || \
+        fail "$cgi_name missing verifier unexpected body: $body_verifier_missing"
+
+    # 8c. Invalid / non-admin sid -> rejected after verifier returns success:false
+    : > "$AUTH_CALL_LOG"
+    raw_bad_sid=$(run_cgi "$cgi" "act=get&sid=wrong_sid")
+    body_bad_sid=$(assert_cgi_json "$raw_bad_sid" "$cgi_name invalid sid")
+    [ -s "$AUTH_CALL_LOG" ] || fail "$cgi_name did not invoke ADM_AUTH_CGI for syntactically valid sid"
+    jq -e '.success == false and (.error | contains("invalid or non-admin session"))' >/dev/null <<<"$body_bad_sid" || \
+        fail "$cgi_name invalid sid unexpected body: $body_bad_sid"
+
+    # 8d. Valid sid + unknown act=bogus -> valid JSON error with HTTP header
+    raw_bogus=$(run_cgi "$cgi" "sid=valid_admin_sid-1.0~ok&act=bogus")
+    body_bogus=$(assert_cgi_json "$raw_bogus" "$cgi_name act=bogus")
+    jq -e '.success == false and (.error | length > 0)' >/dev/null <<<"$body_bogus" || \
+        fail "$cgi_name act=bogus unexpected body: $body_bogus"
+done
+
+# ---------------------------------------------------------------------------
+# 9. Endpoint-specific contracts with valid ADM session
+# ---------------------------------------------------------------------------
+echo "Test 9: Endpoint-specific validation & response contracts..."
+VALID_SID="sid=valid_admin_sid-1.0~ok"
+
+# 9a. apps.cgi?act=get
+APPS_CGI_BODY=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/apps.cgi" "$VALID_SID&act=get")" "apps.cgi get")
+jq -e '.success == true and (.apps | length == 2) and ([.apps[].package] | index("MountFix") == null)' >/dev/null <<<"$APPS_CGI_BODY" || \
+    fail "apps.cgi?act=get unexpected response: $APPS_CGI_BODY"
+
+# 9b. validate.cgi rejects invalid target, MountFix, and traversal app; succeeds on valid target and omits MountFix
+VAL_BAD_TGT=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/validate.cgi" "$VALID_SID&act=get&target=../bad")" "validate.cgi bad target")
+jq -e '.success == false and .error == "Invalid target volume"' >/dev/null <<<"$VAL_BAD_TGT" || \
+    fail "validate.cgi bad target mismatch: $VAL_BAD_TGT"
+
+VAL_MF=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/validate.cgi" "$VALID_SID&act=get&target=/volume2&app=MountFix")" "validate.cgi app=MountFix")
+jq -e '.success == false and .error == "Invalid app name"' >/dev/null <<<"$VAL_MF" || \
+    fail "validate.cgi app=MountFix mismatch: $VAL_MF"
+
+VAL_TRAV=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/validate.cgi" "$VALID_SID&act=get&target=/volume2&app=../bad")" "validate.cgi app=../bad")
+jq -e '.success == false and .error == "Invalid app name"' >/dev/null <<<"$VAL_TRAV" || \
+    fail "validate.cgi app=../bad mismatch: $VAL_TRAV"
+
+VAL_OK=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/validate.cgi" "$VALID_SID&act=get&target=%2Fvolume2")" "validate.cgi valid")
+jq -e '
+    .success == true and
+    ([.apps[].name] == ["docker-ce", "entware"]) and
+    ((.apps[] | select(.name == "docker-ce") | .existsInTarget) == true) and
+    ((.apps[] | select(.name == "entware") | .existsInTarget) == false)
+' >/dev/null <<<"$VAL_OK" || fail "validate.cgi valid response mismatch: $VAL_OK"
+
+# 9c. migrate.cgi propagates outer success:false on start_app_transfer / start_app_sync_back failures
+MIG_EXISTS=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/migrate.cgi" "$VALID_SID&act=migrate&target=/volume2&app=docker-ce")" "migrate.cgi target_exists")
+jq -e '.success == false and .result.success == false and .result.target_exists == true' >/dev/null <<<"$MIG_EXISTS" || \
+    fail "migrate.cgi target_exists propagation mismatch: $MIG_EXISTS"
+
+MIG_BAD_TGT=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/migrate.cgi" "$VALID_SID&act=migrate&target=../bad&app=docker-ce")" "migrate.cgi bad target")
+jq -e '.success == false and .result.success == false and .result.error == "Invalid target volume"' >/dev/null <<<"$MIG_BAD_TGT" || \
+    fail "migrate.cgi bad target mismatch: $MIG_BAD_TGT"
+
+SYNC_BAD_APP=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/migrate.cgi" "$VALID_SID&act=sync_back&target=/volume2&app=MountFix")" "migrate.cgi sync_back MountFix")
+jq -e '.success == false and .result.success == false and .result.error == "Invalid app name"' >/dev/null <<<"$SYNC_BAD_APP" || \
+    fail "migrate.cgi sync_back MountFix mismatch: $SYNC_BAD_APP"
+
+MIG_STATUS=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/migrate.cgi" "$VALID_SID&act=status")" "migrate.cgi status")
+jq -e '.success == true and .result.status == "idle"' >/dev/null <<<"$MIG_STATUS" || \
+    fail "migrate.cgi status mismatch: $MIG_STATUS"
+
+# 9d. mount.cgi rejects invalid app/target with unified JSON response
+MNT_BAD=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/mount.cgi" "$VALID_SID&act=mount&target=/volume2&app=MountFix")" "mount.cgi MountFix")
+jq -e '.success == false and .error == "Invalid app name"' >/dev/null <<<"$MNT_BAD" || \
+    fail "mount.cgi MountFix mismatch: $MNT_BAD"
+
+# 9e. config.cgi?act=get version resolution ("unknown" when config.json missing, never "0.0.0.95") & act=set
+CFG_MISSING_VER_RAW=$(
+    MF_CONTROL_CONFIG_JSON="$CGI_ENV/nonexistent_control_config.json" \
+        run_cgi "$REPO_ROOT/webman/config.cgi" "$VALID_SID&act=get"
+)
+CFG_MISSING_VER=$(assert_cgi_json "$CFG_MISSING_VER_RAW" "config.cgi missing config.json")
+jq -e '.success == true and .version == "unknown" and .config.targetVolume == "/volume2"' >/dev/null <<<"$CFG_MISSING_VER" || \
+    fail "config.cgi missing config.json version mismatch: $CFG_MISSING_VER"
+if grep -q "0\.0\.0\.95" "$REPO_ROOT/webman/config.cgi"; then
+    fail "Stale fallback version 0.0.0.95 still present in webman/config.cgi"
+fi
+
+CFG_REAL_VER=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/config.cgi" "$VALID_SID&act=get")" "config.cgi real config.json")
+EXPECTED_REPO_VER=$(jq -r '.general.version' "$REPO_ROOT/CONTROL/config.json")
+jq -e --arg v "$EXPECTED_REPO_VER" '.success == true and .version == $v' >/dev/null <<<"$CFG_REAL_VER" || \
+    fail "config.cgi repo version mismatch: $CFG_REAL_VER"
+
+CFG_SET_BAD=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/config.cgi" "$VALID_SID&act=set" "$MOCK_ADM_AUTH" '{"targetVolume":"/volume2","selectedApps":[{"name":"MountFix"}]}')" "config.cgi set bad")
+jq -e '.success == false and .error == "Failed to save config"' >/dev/null <<<"$CFG_SET_BAD" || \
+    fail "config.cgi set bad mismatch: $CFG_SET_BAD"
+
+CFG_SET_OK=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/config.cgi" "$VALID_SID&act=set" "$MOCK_ADM_AUTH" '{"targetVolume":"/volume2","selectedApps":[{"name":"entware"}]}')" "config.cgi set ok")
+jq -e '.success == true and .msg == "Settings saved"' >/dev/null <<<"$CFG_SET_OK" || \
+    fail "config.cgi set ok mismatch: $CFG_SET_OK"
+
+echo "PASS: All shared library, F14 protection, url_decode, JSON helper, and CGI hardening tests passed."

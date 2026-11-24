@@ -1,92 +1,108 @@
 #!/bin/sh
 
-# load common functions (like url_decode) - we can source it directly since it's a simple sh script without any side effects
-. /volume1/.@plugins/AppCentral/MountFix/webman/scripts/common.sh
+if [ -n "${MOUNTFIX_WEBMAN_COMMON_SH:-}" ] && [ -f "$MOUNTFIX_WEBMAN_COMMON_SH" ]; then
+    . "$MOUNTFIX_WEBMAN_COMMON_SH"
+elif [ -f "$(dirname "$0")/scripts/common.sh" ]; then
+    . "$(dirname "$0")/scripts/common.sh"
+elif [ -f "/usr/local/AppCentral/MountFix/webman/scripts/common.sh" ]; then
+    . /usr/local/AppCentral/MountFix/webman/scripts/common.sh
+elif [ -f "/volume1/.@plugins/AppCentral/MountFix/webman/scripts/common.sh" ]; then
+    . /volume1/.@plugins/AppCentral/MountFix/webman/scripts/common.sh
+fi
 
-# Paths
-SRC_BASE="/volume1/.@plugins/AppCentral"
-DST_FOLDER_NAME="AppCentral"
+require_adm_session
 
-# HTTP Header
-echo "Content-type: application/json"
-echo ""
+SRC_BASE="$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL"
 
-# Reading action and target from QUERY_STRING
-# We use a simple way to parse parameters without external tools
-ACTION_RAW=$(get_query_param "$QUERY_STRING" "act")
-TARGET_VOL_RAW=$(get_query_param "$QUERY_STRING" "target")
-APP_PARAM_RAW=$(get_query_param "$QUERY_STRING" "app")
+ACTION_RAW=$(get_query_param "${QUERY_STRING:-}" "act")
+TARGET_VOL_RAW=$(get_query_param "${QUERY_STRING:-}" "target")
+APP_PARAM_RAW=$(get_query_param "${QUERY_STRING:-}" "app")
 
 ACTION=$(url_decode "$ACTION_RAW")
 TARGET_VOL=$(url_decode "$TARGET_VOL_RAW")
 APP_PARAM=$(url_decode "$APP_PARAM_RAW")
 
 if [ "$ACTION" = "get" ]; then
-    APPS_JSON=""
-    FIRST=1
-
-    # Check if source directory exists
-    if [ ! -d "$SRC_BASE" ]; then
-        echo "{\"success\": false, \"error\": \"Source directory $SRC_BASE not found\"}"
+    if [ -n "$TARGET_VOL" ] && ! validate_target_volume "$TARGET_VOL"; then
+        send_json_error "Invalid target volume"
         exit 0
     fi
 
-    # Determine which apps to process
-    if [ -n "$APP_PARAM" ]; then
-        # Process single app
-        APP_LIST="$SRC_BASE/$APP_PARAM"
-        if [ ! -d "$APP_LIST" ]; then
-            echo "{\"success\": false, \"error\": \"App $APP_PARAM not found\"}"
-            exit 0
-        fi
-    else
-        # Process all apps
-        APP_LIST="$SRC_BASE"/*
+    if [ -n "$APP_PARAM" ] && ! validate_app_name "$APP_PARAM"; then
+        send_json_error "Invalid app name"
+        exit 0
     fi
 
-    # Iterate through folders
-    for APP_DIR in $APP_LIST; do
+    if [ ! -d "$SRC_BASE" ]; then
+        send_json_error "Source directory $SRC_BASE not found"
+        exit 0
+    fi
+
+    if [ -n "$APP_PARAM" ]; then
+        APP_SINGLE=$(get_app_plugin_path "$APP_PARAM")
+        if [ ! -d "$APP_SINGLE" ]; then
+            send_json_error "App $APP_PARAM not found"
+            exit 0
+        fi
+        set -- "$APP_SINGLE"
+    else
+        set -- "$SRC_BASE"/*
+    fi
+
+    APPS_JSON=""
+    FIRST=1
+
+    for APP_DIR in "$@"; do
         [ -d "$APP_DIR" ] || continue
         APP_NAME=$(basename "$APP_DIR")
+        is_protected_app "$APP_NAME" && continue
 
         SRC_SIZE=$(get_size_human "$APP_DIR")
         SRC_SIZE_KB=$(get_size_kb "$APP_DIR")
+        case "$SRC_SIZE_KB" in
+            ''|*[!0-9]*) SRC_SIZE_KB=0 ;;
+        esac
 
         TARGET_SIZE="0"
         TARGET_SIZE_KB=0
         EXISTS_IN_TARGET="false"
+        MOUNTED="null"
 
         if [ -n "$TARGET_VOL" ]; then
-            TARGET_PATH="$TARGET_VOL/AppCentral/$APP_NAME"
+            TARGET_PATH=$(get_app_data_path "$TARGET_VOL" "$APP_NAME")
             if [ -d "$TARGET_PATH" ]; then
                 EXISTS_IN_TARGET="true"
                 TARGET_SIZE=$(get_size_human "$TARGET_PATH")
                 TARGET_SIZE_KB=$(get_size_kb "$TARGET_PATH")
+                case "$TARGET_SIZE_KB" in
+                    ''|*[!0-9]*) TARGET_SIZE_KB=0 ;;
+                esac
             fi
+            MOUNTED=$(check_app_mount_json "$TARGET_VOL" "$APP_NAME")
         fi
 
-        [ $FIRST -eq 0 ] && APPS_JSON="$APPS_JSON,"
+        APP_NAME_ESC=$(json_escape "$APP_NAME")
+        SRC_SIZE_ESC=$(json_escape "$SRC_SIZE")
+        TARGET_SIZE_ESC=$(json_escape "$TARGET_SIZE")
+
+        [ "$FIRST" -eq 0 ] && APPS_JSON="$APPS_JSON,"
         FIRST=0
-        MOUNTED=$(check_app_mount_json "$TARGET_VOL" "$APP_NAME")
 
         APPS_JSON="$APPS_JSON{
-            \"name\": \"$APP_NAME\",
-            \"sourceSize\": \"$SRC_SIZE\",
+            \"name\": \"$APP_NAME_ESC\",
+            \"sourceSize\": \"$SRC_SIZE_ESC\",
             \"sourceSizeKb\": $SRC_SIZE_KB,
             \"existsInTarget\": $EXISTS_IN_TARGET,
-            \"targetSize\": \"$TARGET_SIZE\",
+            \"targetSize\": \"$TARGET_SIZE_ESC\",
             \"targetSizeKb\": $TARGET_SIZE_KB,
             \"mounted\": $MOUNTED
         }"
     done
 
-    cat <<EOF
-{
-    "success": true,
-    "apps": [$APPS_JSON]
-}
-EOF
-
+    send_json "{
+    \"success\": true,
+    \"apps\": [$APPS_JSON]
+}"
 else
-    echo '{"success": false, "error": "Invalid action"}'
+    send_json_error "Invalid action"
 fi

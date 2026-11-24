@@ -1,49 +1,60 @@
 #!/bin/sh
 
-# load common functions (like url_decode) - we can source it directly since it's a simple sh script without any side effects
-. /volume1/.@plugins/AppCentral/MountFix/webman/scripts/common.sh
+if [ -n "${MOUNTFIX_WEBMAN_COMMON_SH:-}" ] && [ -f "$MOUNTFIX_WEBMAN_COMMON_SH" ]; then
+    . "$MOUNTFIX_WEBMAN_COMMON_SH"
+elif [ -f "$(dirname "$0")/scripts/common.sh" ]; then
+    . "$(dirname "$0")/scripts/common.sh"
+elif [ -f "/usr/local/AppCentral/MountFix/webman/scripts/common.sh" ]; then
+    . /usr/local/AppCentral/MountFix/webman/scripts/common.sh
+elif [ -f "/volume1/.@plugins/AppCentral/MountFix/webman/scripts/common.sh" ]; then
+    . /volume1/.@plugins/AppCentral/MountFix/webman/scripts/common.sh
+fi
 
-# Reading action from QUERY_STRING
-ACTION=$(get_query_param "$QUERY_STRING" "act")
+require_adm_session
+
+ACTION_RAW=$(get_query_param "${QUERY_STRING:-}" "act")
+ACTION=$(url_decode "$ACTION_RAW")
 
 if [ "$ACTION" = "get" ]; then
-    # 1. Getting the list of applications (folders in AppCentral)
-    # We exclude hidden files and take only folder names
-    APPS_JSON=$(get_installed_apps_json)
+    APPS_JSON=$(get_installed_apps_json || true)
+    [ -z "$APPS_JSON" ] && APPS_JSON="[]"
 
-    # 2. Getting the list of volumes (/volume1, /volume2 etc.)
     VOLUMES=$(get_volumes_json)
-
-    # 3. Reading the current config (if it doesn't exist, create empty)
     CURRENT_CONFIG=$(load_mountfix_config)
 
-    # 4. Read installed package version from config.json
-    CONF_FILE="$(dirname "$0")/../CONTROL/config.json"
-    [ ! -f "$CONF_FILE" ] && CONF_FILE="/usr/local/AppCentral/MountFix/CONTROL/config.json"
-    [ ! -f "$CONF_FILE" ] && CONF_FILE="/volume1/.@plugins/AppCentral/MountFix/CONTROL/config.json"
-    APP_VERSION=$(grep -oE '"version": "[^"]+"' "$CONF_FILE" 2>/dev/null | head -n 1 | cut -d'"' -f4)
-    [ -z "$APP_VERSION" ] && APP_VERSION="0.0.0.95"
+    if [ -n "${MF_CONTROL_CONFIG_JSON:-}" ]; then
+        CONF_FILE="$MF_CONTROL_CONFIG_JSON"
+    else
+        CONF_FILE="$(dirname "$0")/../CONTROL/config.json"
+        [ ! -f "$CONF_FILE" ] && CONF_FILE="/usr/local/AppCentral/MountFix/CONTROL/config.json"
+        [ ! -f "$CONF_FILE" ] && CONF_FILE="/volume1/.@plugins/AppCentral/MountFix/CONTROL/config.json"
+    fi
 
-    # 5. Assembling everything into one JSON
-    # We use variables to inject dynamic lists into the object
+    APP_VERSION=""
+    if [ -f "$CONF_FILE" ]; then
+        APP_VERSION=$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$CONF_FILE" 2>/dev/null | head -n 1 | cut -d'"' -f4)
+    fi
+    [ -z "$APP_VERSION" ] && APP_VERSION="unknown"
+    APP_VERSION_ESC=$(json_escape "$APP_VERSION")
+
     RESPONSE_DATA=$(cat <<EOF
         "config": $CURRENT_CONFIG,
         "apps": $APPS_JSON,
         "volumes": [$VOLUMES],
-        "version": "$APP_VERSION"
+        "version": "$APP_VERSION_ESC"
 EOF
 )
 
     send_response true "$RESPONSE_DATA"
 
 elif [ "$ACTION" = "set" ]; then
-    # 1. Reading POST body (raw JSON)
     POST_DATA=$(cat)
 
     if save_mountfix_config "$POST_DATA"; then
         send_response true '"msg": "Settings saved"'
     else
-        send_response false '"error": "Failed to save config"'
+        send_json_error "Failed to save config"
     fi
-
+else
+    send_json_error "Invalid action"
 fi

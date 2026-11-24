@@ -354,16 +354,17 @@ grep -q '^/volume2/AppCentral/minidlna:/volume1/.@plugins/AppCentral/minidlna$' 
 # ---------------------------------------------------------------------------
 echo "Test 8: save_mountfix_config generates mounts.list alongside mountfix.conf..."
 SAVE_PKG="$TMP_DIR/save_pkg"
-mkdir -p "$SAVE_PKG/CONTROL" "$SAVE_PKG/etc"
+mkdir -p "$SAVE_PKG/CONTROL" "$SAVE_PKG/etc" "$SAVE_PKG/vol1/.@plugins/AppCentral/docker-ce"
 cp "$REPO_ROOT/CONTROL/lib.sh" "$SAVE_PKG/CONTROL/lib.sh"
 (
+    export DIR_VOL1="$SAVE_PKG/vol1"
     # shellcheck disable=SC1091
     . "$REPO_ROOT/webman/scripts/common.sh"
     MF_CONFIG_DIR="$SAVE_PKG/etc" save_mountfix_config '{"targetVolume":"/volume2","selectedApps":[{"name":"docker-ce"}]}'
 )
 [ -f "$SAVE_PKG/etc/mounts.list" ] || { echo "FAIL: save_mountfix_config did not generate mounts.list"; exit 1; }
-grep -q '^/volume2/AppCentral/docker-ce:/volume1/.@plugins/AppCentral/docker-ce$' "$SAVE_PKG/etc/mounts.list" || {
-    echo "FAIL: save_mountfix_config mounts.list content wrong"
+grep -qxF "/volume2/AppCentral/docker-ce:$SAVE_PKG/vol1/.@plugins/AppCentral/docker-ce" "$SAVE_PKG/etc/mounts.list" || {
+    echo "FAIL: save_mountfix_config mounts.list content wrong: $(cat "$SAVE_PKG/etc/mounts.list")"
     exit 1
 }
 

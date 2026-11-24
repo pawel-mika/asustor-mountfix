@@ -1,21 +1,24 @@
-#!/usr/bin/env sh
+#!/bin/sh
 
-# load common functions (like url_decode) - we can source it directly since it's a simple sh script without any side effects
-. /volume1/.@plugins/AppCentral/MountFix/webman/scripts/common.sh
+if [ -n "${MOUNTFIX_WEBMAN_COMMON_SH:-}" ] && [ -f "$MOUNTFIX_WEBMAN_COMMON_SH" ]; then
+    . "$MOUNTFIX_WEBMAN_COMMON_SH"
+elif [ -f "$(dirname "$0")/scripts/common.sh" ]; then
+    . "$(dirname "$0")/scripts/common.sh"
+elif [ -f "/usr/local/AppCentral/MountFix/webman/scripts/common.sh" ]; then
+    . /usr/local/AppCentral/MountFix/webman/scripts/common.sh
+elif [ -f "/volume1/.@plugins/AppCentral/MountFix/webman/scripts/common.sh" ]; then
+    . /volume1/.@plugins/AppCentral/MountFix/webman/scripts/common.sh
+fi
 
-# Reading action and target from QUERY_STRING
-ACTION_RAW=$(get_query_param "$QUERY_STRING" "act")
-TARGET_VOL_RAW=$(get_query_param "$QUERY_STRING" "target")
-APP_PARAM_RAW=$(get_query_param "$QUERY_STRING" "app")
+require_adm_session
 
+ACTION_RAW=$(get_query_param "${QUERY_STRING:-}" "act")
 ACTION=$(url_decode "$ACTION_RAW")
-TARGET_VOL=$(url_decode "$TARGET_VOL_RAW")
-APP_PARAM=$(url_decode "$APP_PARAM_RAW")
 
 if [ "$ACTION" = "get" ]; then
-    APPS_JSON=$(get_installed_apps_json)
-
+    APPS_JSON=$(get_installed_apps_json || true)
+    [ -z "$APPS_JSON" ] && APPS_JSON="[]"
     send_response true "\"apps\": $APPS_JSON"
 else
-    send_response false '"error": "Invalid action"'
+    send_json_error "Invalid action"
 fi
