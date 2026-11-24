@@ -113,7 +113,7 @@ require_adm_session() {
         send_json_error "Unauthorized: session verifier unavailable"
         exit 0
     fi
-    auth_out=$(REQUEST_METHOD=GET QUERY_STRING="sid=$sid_raw" "$ADM_AUTH_CGI" 2>/dev/null || true)
+    auth_out=$(REQUEST_METHOD=GET CONTENT_LENGTH= CONTENT_TYPE= QUERY_STRING="act=get-nonstop&sid=$sid_raw" "$ADM_AUTH_CGI" </dev/null 2>/dev/null || true)
     if ! printf '%s\n' "$auth_out" | grep -q '"success"[[:space:]]*:[[:space:]]*true'; then
         send_json_error "Unauthorized: invalid or non-admin session"
         exit 0

@@ -26,10 +26,12 @@ APP_PARAM=$(url_decode "$APP_PARAM_RAW")
 case "$ACTION" in
     mount)
         OUT=$(mount_app "$TARGET_VOL" "$APP_PARAM" || true)
+        [ -z "$OUT" ] && OUT='{"success": false, "error": "Mount operation failed"}'
         send_json "$OUT"
         ;;
     unmount)
         OUT=$(unmount_app "$TARGET_VOL" "$APP_PARAM" || true)
+        [ -z "$OUT" ] && OUT='{"success": false, "error": "Unmount operation failed"}'
         send_json "$OUT"
         ;;
     *)

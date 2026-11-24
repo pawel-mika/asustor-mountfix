@@ -339,12 +339,25 @@ printf '{"targetVolume":"/volume2","selectedApps":[{"name":"docker-ce"}]}\n' > "
 cat <<EOF > "$MOCK_ADM_AUTH"
 #!/bin/sh
 echo "\$QUERY_STRING" >> "$AUTH_CALL_LOG"
+# Drain stdin to catch any caller that fails to isolate POST body via </dev/null
+cat >/dev/null 2>&1 || true
 printf 'Content-Type: application/json\r\n\r\n'
-if [ "\$QUERY_STRING" = "sid=valid_admin_sid-1.0~ok" ]; then
-    echo '{ "success": true }'
-else
-    echo '{ "success": false, "error_code": 5000 }'
+if [ "\${REQUEST_METHOD:-}" != "GET" ] || [ -n "\${CONTENT_LENGTH:-}" ] || [ -n "\${CONTENT_TYPE:-}" ]; then
+    echo '{ "success": false, "error_code": 5300 }'
+    exit 0
 fi
+case "&\$QUERY_STRING&" in
+    *"&act=get-nonstop&"*)
+        if [ "\$QUERY_STRING" = "act=get-nonstop&sid=valid_admin_sid-1.0~ok" ]; then
+            echo '{ "success": true, "nonstop": "none" }'
+        else
+            echo '{ "success": false, "error_code": 5000 }'
+        fi
+        ;;
+    *)
+        echo '{ "success": false, "error_code": 5301 }'
+        ;;
+esac
 EOF
 chmod 755 "$MOCK_ADM_AUTH"
 
@@ -357,7 +370,7 @@ run_cgi() {
     printf '%s' "$stdin_data" | \
         QUERY_STRING="$qs" \
         ADM_AUTH_CGI="$auth_bin" \
-        MOUNTFIX_WEBMAN_COMMON_SH="$REPO_ROOT/webman/scripts/common.sh" \
+        MOUNTFIX_WEBMAN_COMMON_SH="${MOUNTFIX_WEBMAN_COMMON_SH:-$REPO_ROOT/webman/scripts/common.sh}" \
         MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
         INSTALLED_APPS_JSON="$INSTALLED_FIXTURE" \
         DIR_VOL1="$CGI_VOL1" \
@@ -419,12 +432,21 @@ for cgi in "${CGI_LIST[@]}"; do
     jq -e '.success == false and (.error | contains("invalid or non-admin session"))' >/dev/null <<<"$body_bad_sid" || \
         fail "$cgi_name invalid sid unexpected body: $body_bad_sid"
 
-    # 8d. Valid sid + unknown act=bogus -> valid JSON error with HTTP header
+    # 8d. Valid sid + unknown act=bogus -> valid JSON error with HTTP header, and verifier saw act=get-nonstop
+    : > "$AUTH_CALL_LOG"
     raw_bogus=$(run_cgi "$cgi" "sid=valid_admin_sid-1.0~ok&act=bogus")
     body_bogus=$(assert_cgi_json "$raw_bogus" "$cgi_name act=bogus")
+    [ "$(cat "$AUTH_CALL_LOG")" = "act=get-nonstop&sid=valid_admin_sid-1.0~ok" ] || \
+        fail "$cgi_name did not pass act=get-nonstop&sid=... to ADM_AUTH_CGI: [$(cat "$AUTH_CALL_LOG")]"
     jq -e '.success == false and (.error | length > 0)' >/dev/null <<<"$body_bogus" || \
         fail "$cgi_name act=bogus unexpected body: $body_bogus"
 done
+
+# Confirm MOCK_ADM_AUTH returns error_code 5301 when act=get-nonstop is omitted (matching ADM 5.1.5 admin.cgi)
+MOCK_NO_ACT_RAW=$(REQUEST_METHOD=GET CONTENT_LENGTH= CONTENT_TYPE= QUERY_STRING="sid=valid_admin_sid-1.0~ok" "$MOCK_ADM_AUTH" </dev/null)
+MOCK_NO_ACT_BODY=$(assert_cgi_json "$MOCK_NO_ACT_RAW" "mock_admin.cgi missing act=get-nonstop")
+jq -e '.success == false and .error_code == 5301' >/dev/null <<<"$MOCK_NO_ACT_BODY" || \
+    fail "mock_admin.cgi missing act=get-nonstop expected error_code 5301, got: $MOCK_NO_ACT_BODY"
 
 # ---------------------------------------------------------------------------
 # 9. Endpoint-specific contracts with valid ADM session
@@ -475,10 +497,23 @@ MIG_STATUS=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/migrate.cgi" "$VALID_
 jq -e '.success == true and .result.status == "idle"' >/dev/null <<<"$MIG_STATUS" || \
     fail "migrate.cgi status mismatch: $MIG_STATUS"
 
-# 9d. mount.cgi rejects invalid app/target with unified JSON response
+# 9d. mount.cgi rejects invalid app/target with unified JSON response & guards against empty output
 MNT_BAD=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/mount.cgi" "$VALID_SID&act=mount&target=/volume2&app=MountFix")" "mount.cgi MountFix")
 jq -e '.success == false and .error == "Invalid app name"' >/dev/null <<<"$MNT_BAD" || \
     fail "mount.cgi MountFix mismatch: $MNT_BAD"
+
+EMPTY_MOUNT_COMMON="$CGI_ENV/empty_mount_common.sh"
+cat <<EOF > "$EMPTY_MOUNT_COMMON"
+. "$REPO_ROOT/webman/scripts/common.sh"
+mount_app() { return 1; }
+unmount_app() { return 1; }
+EOF
+MNT_EMPTY=$(assert_cgi_json "$(MOUNTFIX_WEBMAN_COMMON_SH="$EMPTY_MOUNT_COMMON" run_cgi "$REPO_ROOT/webman/mount.cgi" "$VALID_SID&act=mount&target=/volume2&app=docker-ce")" "mount.cgi empty mount_app output")
+jq -e '.success == false and .error == "Mount operation failed"' >/dev/null <<<"$MNT_EMPTY" || \
+    fail "mount.cgi empty mount_app fallback mismatch: $MNT_EMPTY"
+UMNT_EMPTY=$(assert_cgi_json "$(MOUNTFIX_WEBMAN_COMMON_SH="$EMPTY_MOUNT_COMMON" run_cgi "$REPO_ROOT/webman/mount.cgi" "$VALID_SID&act=unmount&target=/volume2&app=docker-ce")" "mount.cgi empty unmount_app output")
+jq -e '.success == false and .error == "Unmount operation failed"' >/dev/null <<<"$UMNT_EMPTY" || \
+    fail "mount.cgi empty unmount_app fallback mismatch: $UMNT_EMPTY"
 
 # 9e. config.cgi?act=get version resolution ("unknown" when config.json missing, never "0.0.0.95") & act=set
 CFG_MISSING_VER_RAW=$(
@@ -504,6 +539,30 @@ jq -e '.success == false and .error == "Failed to save config"' >/dev/null <<<"$
 CFG_SET_OK=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/config.cgi" "$VALID_SID&act=set" "$MOCK_ADM_AUTH" '{"targetVolume":"/volume2","selectedApps":[{"name":"entware"}]}')" "config.cgi set ok")
 jq -e '.success == true and .msg == "Settings saved"' >/dev/null <<<"$CFG_SET_OK" || \
     fail "config.cgi set ok mismatch: $CFG_SET_OK"
+
+# Verify POST body stdin is NOT consumed by require_adm_session() even when REQUEST_METHOD=POST and CONTENT_LENGTH/CONTENT_TYPE are set
+POST_PAYLOAD='{"targetVolume":"/volume2","selectedApps":[{"name":"docker-ce"},{"name":"entware","enabled":false}]}'
+CFG_POST_RAW=$(
+    printf '%s' "$POST_PAYLOAD" | \
+        REQUEST_METHOD=POST \
+        CONTENT_LENGTH="${#POST_PAYLOAD}" \
+        CONTENT_TYPE="application/json" \
+        QUERY_STRING="$VALID_SID&act=set" \
+        ADM_AUTH_CGI="$MOCK_ADM_AUTH" \
+        MOUNTFIX_WEBMAN_COMMON_SH="$REPO_ROOT/webman/scripts/common.sh" \
+        MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
+        INSTALLED_APPS_JSON="$INSTALLED_FIXTURE" \
+        DIR_VOL1="$CGI_VOL1" \
+        VOLUME_ROOT="$CGI_VOL_ROOT" \
+        CONFIG_FILE="$CGI_ETC/mountfix.conf" \
+        MF_CONFIG_DIR="$CGI_ETC" \
+        sh "$REPO_ROOT/webman/config.cgi"
+)
+CFG_POST_BODY=$(assert_cgi_json "$CFG_POST_RAW" "config.cgi POST set stdin preservation")
+jq -e '.success == true and .msg == "Settings saved"' >/dev/null <<<"$CFG_POST_BODY" || \
+    fail "config.cgi POST set failed (stdin consumed or env leaked into require_adm_session): $CFG_POST_BODY"
+jq -e '. == {"targetVolume":"/volume2","selectedApps":[{"name":"docker-ce"},{"name":"entware","enabled":false}]}' "$CGI_ETC/mountfix.conf" >/dev/null || \
+    fail "config.cgi POST set did not persist full POST body: $(cat "$CGI_ETC/mountfix.conf")"
 
 # ---------------------------------------------------------------------------
 # 10. resolve_base_block_device: SATA, NVMe, and MMC partition stripping (F13)

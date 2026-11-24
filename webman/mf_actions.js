@@ -112,7 +112,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 page.unmaskWindow(actionMsg);
             },
             failure: function (json) {
-                page.updateStatus('Error: Unable to save settings', true);
+                page.updateStatus('Error: ' + ((json && json.error) || 'Unable to save settings'), true);
                 page.unmaskWindow(actionMsg);
             },
         });
@@ -199,6 +199,66 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         return values;
     },
 
+    promptTargetExists: function (app, target) {
+        var page = this;
+        if (Ext.ClassManager && Ext.ClassManager.isCreated('AS.ARC.msgWindow')) {
+            var confirmDlg = Ext.create('AS.ARC.msgWindow', {
+                parentWin: page.win,
+                title: 'Target Directory Exists',
+                width: 500,
+                height: 220,
+                iconType: 'warning',
+                asItems: [
+                    {
+                        xtype: 'displayfield',
+                        value:
+                            '<div style="font-size: 13px; font-weight: bold; margin-bottom: 8px;">' +
+                            'Target folder already contains data' +
+                            '</div>' +
+                            '<div style="font-size: 12px; line-height: 18px;">' +
+                            'Target directory for <b>' +
+                            Ext.String.htmlEncode(app) +
+                            '</b> on volume <b>' +
+                            Ext.String.htmlEncode(target) +
+                            '</b> already contains data.<br><br>' +
+                            'Are you sure you want to continue copying? (Safe update mode <code>rsync -au</code> will be used, preserving newer files on SSD).' +
+                            '</div>',
+                    },
+                ],
+                fbar: [
+                    {
+                        text: 'Continue',
+                        handler: function () {
+                            confirmDlg.close();
+                            page.migrateSelectedApp(true);
+                        },
+                    },
+                    {
+                        text: 'Cancel',
+                        handler: function () {
+                            confirmDlg.close();
+                        },
+                    },
+                ],
+            });
+            confirmDlg.show();
+        } else {
+            Ext.Msg.confirm(
+                'Target Directory Exists',
+                'Target directory for ' +
+                    Ext.String.htmlEncode(app) +
+                    ' on volume ' +
+                    Ext.String.htmlEncode(target) +
+                    ' already contains data.<br><br>Are you sure you want to continue copying? (Safe update mode rsync -au will be used, preserving newer files on SSD).',
+                function (btn) {
+                    if (btn === 'yes') {
+                        page.migrateSelectedApp(true);
+                    }
+                },
+            );
+        }
+    },
+
     migrateSelectedApp: function (force) {
         var page = this;
         var actionMsg = 'Copying application...';
@@ -220,70 +280,30 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, params),
             params: Ext.encode(page.getMfConfig()),
             success: function (json) {
-                var res = json.result || {};
+                var res = (json && json.result) || {};
                 if (res.target_exists && !force) {
                     page.unmaskWindow(actionMsg);
-                    if (Ext.ClassManager && Ext.ClassManager.isCreated('AS.ARC.msgWindow')) {
-                        var confirmDlg = Ext.create('AS.ARC.msgWindow', {
-                            parentWin: page.win,
-                            title: 'Target Directory Exists',
-                            width: 500,
-                            height: 220,
-                            iconType: 'warning',
-                            asItems: [
-                                {
-                                    xtype: 'displayfield',
-                                    value: '<div style="font-size: 13px; font-weight: bold; margin-bottom: 8px;">' +
-                                        'Target folder already contains data' +
-                                        '</div>' +
-                                        '<div style="font-size: 12px; line-height: 18px;">' +
-                                        'Target directory for <b>' + Ext.String.htmlEncode(app) + '</b> on volume <b>' + Ext.String.htmlEncode(target) + '</b> already contains data.<br><br>' +
-                                        'Are you sure you want to continue copying? (Safe update mode <code>rsync -au</code> will be used, preserving newer files on SSD).' +
-                                        '</div>'
-                                }
-                            ],
-                            fbar: [
-                                {
-                                    text: 'Continue',
-                                    handler: function () {
-                                        confirmDlg.close();
-                                        page.migrateSelectedApp(true);
-                                    }
-                                },
-                                {
-                                    text: 'Cancel',
-                                    handler: function () {
-                                        confirmDlg.close();
-                                    }
-                                }
-                            ]
-                        });
-                        confirmDlg.show();
-                    } else {
-                        Ext.Msg.confirm(
-                            'Target Directory Exists',
-                            'Target directory for ' + Ext.String.htmlEncode(app) + ' on volume ' + Ext.String.htmlEncode(target) + ' already contains data.<br><br>Are you sure you want to continue copying? (Safe update mode rsync -au will be used, preserving newer files on SSD).',
-                            function (btn) {
-                                if (btn === 'yes') {
-                                    page.migrateSelectedApp(true);
-                                }
-                            }
-                        );
-                    }
+                    page.promptTargetExists(app, target);
                     return;
                 }
-                if (json.success && (res.success || res.success === undefined)) {
+                if (json && json.success && (res.success || res.success === undefined)) {
                     page.unmaskWindow(actionMsg);
                     page.updateStatus('Started copying ' + app, false);
                     page.monitorMigrationStatus('Copying ' + app);
                 } else {
                     page.unmaskWindow(actionMsg);
-                    page.updateStatus('Error: ' + (res.error || json.error || 'Failed to start copying'), true);
+                    page.updateStatus('Error: ' + (res.error || (json && json.error) || 'Failed to start copying'), true);
                 }
             },
-            failure: function () {
-                page.updateStatus('Error: Unable to start copying', true);
+            failure: function (json) {
+                var res = (json && json.result) || {};
+                if (res.target_exists && !force) {
+                    page.unmaskWindow(actionMsg);
+                    page.promptTargetExists(app, target);
+                    return;
+                }
                 page.unmaskWindow(actionMsg);
+                page.updateStatus('Error: ' + (res.error || (json && json.error) || 'Unable to start copying'), true);
             },
         });
     },
@@ -305,19 +325,19 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'sync_back', target: target, app: app }),
             method: 'GET',
             success: function (json) {
-                var res = json.result || {};
-                if (json.success && (res.success || res.success === undefined)) {
+                var res = (json && json.result) || {};
+                if (json && json.success && (res.success || res.success === undefined)) {
                     page.unmaskWindow(actionMsg);
                     page.updateStatus('Started sync-back for ' + app, false);
                     page.monitorMigrationStatus('Sync-back ' + app, callbackOnComplete);
                 } else {
                     page.unmaskWindow(actionMsg);
-                    page.updateStatus('Error: ' + (res.error || json.error || 'Failed to start sync back'), true);
+                    page.updateStatus('Error: ' + (res.error || (json && json.error) || 'Failed to start sync back'), true);
                 }
             },
-            failure: function () {
+            failure: function (json) {
                 page.unmaskWindow(actionMsg);
-                page.updateStatus('Error: Unable to start sync back', true);
+                page.updateStatus('Error: ' + ((json && json.result && json.result.error) || (json && json.error) || 'Unable to start sync back'), true);
             },
         });
     },
@@ -444,9 +464,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                     page.updateStatus('Error: ' + ((json && json.error) || 'Operation failed'), true);
                 }
             },
-            failure: function () {
+            failure: function (json) {
                 page.unmaskWindow(actionMsg);
-                page.updateStatus('Error: Unable to ' + act + ' application', true);
+                page.updateStatus('Error: ' + ((json && json.error) || ('Unable to ' + act + ' application')), true);
             },
         });
     },
