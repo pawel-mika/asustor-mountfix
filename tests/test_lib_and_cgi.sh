@@ -505,4 +505,221 @@ CFG_SET_OK=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/config.cgi" "$VALID_S
 jq -e '.success == true and .msg == "Settings saved"' >/dev/null <<<"$CFG_SET_OK" || \
     fail "config.cgi set ok mismatch: $CFG_SET_OK"
 
-echo "PASS: All shared library, F14 protection, url_decode, JSON helper, and CGI hardening tests passed."
+# ---------------------------------------------------------------------------
+# 10. resolve_base_block_device: SATA, NVMe, and MMC partition stripping (F13)
+# ---------------------------------------------------------------------------
+echo "Test 10: resolve_base_block_device handles SATA, NVMe, and MMC devices..."
+(
+    # shellcheck disable=SC1091
+    . "$REPO_ROOT/webman/scripts/common.sh"
+
+    assert_base_dev() {
+        local input="$1"
+        local expected="$2"
+        local actual
+        actual=$(resolve_base_block_device "$input")
+        [ "$actual" = "$expected" ] || \
+            fail "resolve_base_block_device($input): expected [$expected], got [$actual]"
+    }
+
+    assert_base_dev "sdd4" "sdd"
+    assert_base_dev "sda12" "sda"
+    assert_base_dev "nvme0n1p1" "nvme0n1"
+    assert_base_dev "nvme1n1p4" "nvme1n1"
+    assert_base_dev "nvme0n1" "nvme0n1"
+    assert_base_dev "mmcblk0p2" "mmcblk0"
+    assert_base_dev "mmcblk0" "mmcblk0"
+    assert_base_dev "sda" "sda"
+)
+
+# ---------------------------------------------------------------------------
+# 11. get_volume_rotational with fake SYS_BLOCK_DIR and PROC_MOUNTS (F13)
+# ---------------------------------------------------------------------------
+echo "Test 11: get_volume_rotational detects HDD RAID, NVMe RAID, and direct NVMe partitions..."
+ROT_ENV="$TMP_DIR/rot_env"
+FAKE_SYS_BLOCK="$ROT_ENV/sys_block"
+FAKE_PROC_MOUNTS="$ROT_ENV/proc_mounts"
+FAKE_VOLS="$ROT_ENV/volumes"
+
+mkdir -p \
+    "$FAKE_SYS_BLOCK/md1/slaves" \
+    "$FAKE_SYS_BLOCK/sdd/queue" \
+    "$FAKE_SYS_BLOCK/md2/slaves" \
+    "$FAKE_SYS_BLOCK/nvme0n1/queue" \
+    "$FAKE_SYS_BLOCK/nvme1n1/queue" \
+    "$FAKE_VOLS/volume1" \
+    "$FAKE_VOLS/volume2" \
+    "$FAKE_VOLS/volume3"
+
+: > "$FAKE_SYS_BLOCK/md1/slaves/sdd4"
+printf '1\n' > "$FAKE_SYS_BLOCK/sdd/queue/rotational"
+
+# Simulate `@` suffix from `ls -F` / symlink indicator on NVMe RAID slave
+: > "$FAKE_SYS_BLOCK/md2/slaves/nvme0n1p3@"
+printf '0\n' > "$FAKE_SYS_BLOCK/nvme0n1/queue/rotational"
+
+# Direct NVMe partition /dev/nvme1n1p1 has no /sys/block/nvme1n1p1 entry, only base disk /sys/block/nvme1n1
+printf '0\n' > "$FAKE_SYS_BLOCK/nvme1n1/queue/rotational"
+
+cat <<EOF > "$FAKE_PROC_MOUNTS"
+/dev/md10 /volume10 ext4 rw,relatime 0 0
+/dev/md1 /volume1 ext4 rw,relatime 0 0
+/dev/md2 $FAKE_VOLS/volume2 btrfs rw,relatime 0 0
+/dev/nvme1n1p1 /volume3 ext4 rw,relatime 0 0
+EOF
+
+(
+    export SYS_BLOCK_DIR="$FAKE_SYS_BLOCK"
+    export PROC_MOUNTS="$FAKE_PROC_MOUNTS"
+    export VOLUMES_ROOT="$FAKE_VOLS"
+    # shellcheck disable=SC1091
+    . "$REPO_ROOT/webman/scripts/common.sh"
+
+    # /volume1 -> md1 -> sdd4 -> sdd/queue/rotational=1 (and does not match /volume10)
+    rot_v1=$(get_volume_rotational "/volume1")
+    [ "$rot_v1" = "1" ] || fail "Expected /volume1 rotational=1 (HDD), got [$rot_v1]"
+
+    # $FAKE_VOLS/volume2 -> md2 -> nvme0n1p3@ -> nvme0n1/queue/rotational=0
+    rot_v2=$(get_volume_rotational "$FAKE_VOLS/volume2")
+    [ "$rot_v2" = "0" ] || fail "Expected volume2 NVMe RAID rotational=0 (SSD), got [$rot_v2]"
+
+    # /volume3 -> /dev/nvme1n1p1 (no slaves/) -> nvme1n1/queue/rotational=0
+    rot_v3=$(get_volume_rotational "/volume3")
+    [ "$rot_v3" = "0" ] || fail "Expected /volume3 direct NVMe partition rotational=0 (SSD), got [$rot_v3]"
+
+    # Also works via VOLUMES_ROOT logical fallback ($FAKE_VOLS/volume3 -> /volume3 in PROC_MOUNTS)
+    rot_v3_dir=$(get_volume_rotational "$FAKE_VOLS/volume3")
+    [ "$rot_v3_dir" = "0" ] || fail "Expected $FAKE_VOLS/volume3 rotational=0 via logical fallback, got [$rot_v3_dir]"
+
+    # Direct device arguments
+    [ "$(get_volume_rotational "/dev/nvme1n1p1")" = "0" ] || fail "Expected /dev/nvme1n1p1 rotational=0"
+    [ "$(get_volume_rotational "md2")" = "0" ] || fail "Expected md2 rotational=0"
+    [ "$(get_volume_rotational "md1")" = "1" ] || fail "Expected md1 rotational=1"
+    [ "$(get_volume_rotational "/volume99")" = "1" ] || fail "Expected unknown /volume99 rotational=1 fallback"
+)
+
+# ---------------------------------------------------------------------------
+# 12. get_volumes_json with wrapped df output, -Ph fallback, and escaping (F13)
+# ---------------------------------------------------------------------------
+echo "Test 12: get_volumes_json parses wrapped df output, POSIX -Ph fallback, and NVMe SSD flags..."
+DF_ENV="$TMP_DIR/df_env"
+DF_VOLS="$DF_ENV/vols"
+MOCK_DF_WRAP="$DF_ENV/mock_df_wrap.sh"
+MOCK_DF_NOP="$DF_ENV/mock_df_no_p.sh"
+DF_PROC_MOUNTS="$DF_ENV/proc_mounts"
+
+mkdir -p "$DF_VOLS/volume1" "$DF_VOLS/volume2"
+
+cat <<EOF > "$DF_PROC_MOUNTS"
+/dev/md1 $DF_VOLS/volume1 ext4 rw,relatime 0 0
+/dev/md2 $DF_VOLS/volume2 btrfs rw,relatime 0 0
+EOF
+
+# Mock df #1: accepts -Ph, emits single-line for volume1 and wrapped 2-line for volume2
+cat <<'EOF' > "$MOCK_DF_WRAP"
+#!/bin/sh
+flag="$1"
+target="$2"
+[ "$flag" = "-Ph" ] || exit 1
+echo "Filesystem                Size      Used Available Use% Mounted on"
+case "$target" in
+    */volume1)
+        echo "/dev/md1                  3.6T      1.2T      2.4T  34% /volume1"
+        ;;
+    */volume2)
+        echo "/dev/mapper/vg_nvme_long_device_name"
+        echo "                          916G      120G      796G  14% /volume2"
+        ;;
+esac
+EOF
+chmod 755 "$MOCK_DF_WRAP"
+
+# Mock df #2: rejects -Ph (simulating BusyBox without -P), falls back to -h with wrapped output + quote in device name
+cat <<'EOF' > "$MOCK_DF_NOP"
+#!/bin/sh
+flag="$1"
+target="$2"
+if [ "$flag" = "-Ph" ]; then
+    echo "df: invalid option -- 'P'" >&2
+    exit 1
+fi
+echo "Filesystem                Size      Used Available Use% Mounted on"
+case "$target" in
+    */volume1)
+        echo '/dev/md"1                 3.6T      1.2T      2.4T  34% /volume1'
+        ;;
+    */volume2)
+        echo "/dev/mapper/vg_nvme_long_device_name"
+        echo "                          916G      120G      796G  14% /volume2"
+        ;;
+esac
+EOF
+chmod 755 "$MOCK_DF_NOP"
+
+VOLS_JSON_1=$(
+    SYS_BLOCK_DIR="$FAKE_SYS_BLOCK" \
+    PROC_MOUNTS="$DF_PROC_MOUNTS" \
+    VOLUMES_ROOT="$DF_VOLS" \
+    DF_BIN="$MOCK_DF_WRAP" \
+    sh -c '. "$1/webman/scripts/common.sh" && printf "[%s]\n" "$(get_volumes_json)"' _ "$REPO_ROOT"
+)
+
+printf '%s\n' "$VOLS_JSON_1" | jq empty || fail "get_volumes_json (wrapped -Ph) produced invalid JSON: $VOLS_JSON_1"
+jq -e '
+    length == 2 and
+    (.[0] == {
+        volume: "/volume1",
+        mountPoint: "/dev/md1",
+        freeSpace: "2.4T",
+        totalSpace: "3.6T",
+        usedPercent: "34%",
+        isSSD: false
+    }) and
+    (.[1] == {
+        volume: "/volume2",
+        mountPoint: "/dev/mapper/vg_nvme_long_device_name",
+        freeSpace: "796G",
+        totalSpace: "916G",
+        usedPercent: "14%",
+        isSSD: true
+    })
+' >/dev/null <<<"$VOLS_JSON_1" || fail "get_volumes_json (wrapped -Ph) mismatch: $VOLS_JSON_1"
+
+VOLS_JSON_2=$(
+    SYS_BLOCK_DIR="$FAKE_SYS_BLOCK" \
+    PROC_MOUNTS="$DF_PROC_MOUNTS" \
+    VOLUMES_ROOT="$DF_VOLS" \
+    DF_BIN="$MOCK_DF_NOP" \
+    sh -c '. "$1/webman/scripts/common.sh" && printf "[%s]\n" "$(get_volumes_json)"' _ "$REPO_ROOT"
+)
+
+printf '%s\n' "$VOLS_JSON_2" | jq empty || fail "get_volumes_json (-h fallback + quote escape) produced invalid JSON: $VOLS_JSON_2"
+jq -e '
+    length == 2 and
+    .[0].volume == "/volume1" and
+    .[0].mountPoint == "/dev/md\"1" and
+    .[0].isSSD == false and
+    .[1].volume == "/volume2" and
+    .[1].mountPoint == "/dev/mapper/vg_nvme_long_device_name" and
+    .[1].freeSpace == "796G" and
+    .[1].totalSpace == "916G" and
+    .[1].usedPercent == "14%" and
+    .[1].isSSD == true
+' >/dev/null <<<"$VOLS_JSON_2" || fail "get_volumes_json (-h fallback) mismatch: $VOLS_JSON_2"
+
+# Verify config.cgi?act=get end-to-end includes the parsed NVMe/HDD volumes
+CFG_VOLS_RAW=$(
+    SYS_BLOCK_DIR="$FAKE_SYS_BLOCK" \
+    PROC_MOUNTS="$DF_PROC_MOUNTS" \
+    VOLUMES_ROOT="$DF_VOLS" \
+    DF_BIN="$MOCK_DF_WRAP" \
+    run_cgi "$REPO_ROOT/webman/config.cgi" "$VALID_SID&act=get"
+)
+CFG_VOLS_BODY=$(assert_cgi_json "$CFG_VOLS_RAW" "config.cgi volumes integration")
+jq -e '
+    (.volumes | length == 2) and
+    (.volumes[0].volume == "/volume1" and .volumes[0].isSSD == false) and
+    (.volumes[1].volume == "/volume2" and .volumes[1].isSSD == true and .volumes[1].freeSpace == "796G")
+' >/dev/null <<<"$CFG_VOLS_BODY" || fail "config.cgi volumes integration mismatch: $CFG_VOLS_BODY"
+
+echo "PASS: All shared library, F14 protection, url_decode, JSON helper, CGI hardening, and F13 NVMe/df tests passed."

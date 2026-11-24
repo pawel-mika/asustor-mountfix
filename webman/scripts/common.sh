@@ -234,52 +234,92 @@ save_mountfix_config() {
 }
 
 ####################################################################
-# Check if /volumeX is located on an SSD device
+# Resolve partition device name (SATA/SAS, NVMe, MMC) to base disk
+####################################################################
+resolve_base_block_device() {
+    local dev="$1"
+    case "$dev" in
+        nvme*n*p[0-9]*|mmcblk*p[0-9]*)
+            printf '%s\n' "$dev" | sed 's/p[0-9][0-9]*$//'
+            ;;
+        nvme*|mmcblk*)
+            printf '%s\n' "$dev"
+            ;;
+        *)
+            printf '%s\n' "$dev" | sed 's/[0-9][0-9]*$//'
+            ;;
+    esac
+}
+
+####################################################################
+# Check if /volumeX is located on an SSD device (0=SSD, 1=HDD)
 ####################################################################
 get_volume_rotational() {
-    local target=$1 # It can be /volume1 or /dev/md1
-    local dev_name=""
+    local target="${1:-}"
+    local sys_block_dir="${SYS_BLOCK_DIR:-/sys/block}"
+    local volumes_root="${VOLUMES_ROOT:-}"
+    local volume_root="${VOLUME_ROOT:-}"
+    local dev_name="" first_slave="" base_disk="" rot_file="" rot_val=""
 
-    # 1. Check if a path was provided (starts with /volume)
+    volumes_root="${volumes_root%/}"
+    volume_root="${volume_root%/}"
 
-    if echo "$target" | grep -q "^/volume"; then
-        # Extract the device associated with this mount point
-        # Use awk to precisely extract /dev/mdX
-        dev_name=$(mount | grep "on $target " | awk '{print $1}' | cut -d'/' -f3)
-    else
-        # If mdX or /dev/mdX was provided directly
-        dev_name=$(echo "$target" | sed 's|/dev/||')
-    fi
+    case "$target" in
+        /dev/*)
+            dev_name="${target#/dev/}"
+            ;;
+        /volume*|*/volume[0-9]*)
+            if [ -r "$PROC_MOUNTS" ]; then
+                dev_name=$(awk -v t="$target" '$2 == t { sub("^/dev/", "", $1); print $1; exit }' "$PROC_MOUNTS" 2>/dev/null || true)
+                if [ -z "$dev_name" ] && [ -n "$volumes_root" ] && [ "${target#"$volumes_root"}" != "$target" ]; then
+                    dev_name=$(awk -v t="${target#"$volumes_root"}" '$2 == t { sub("^/dev/", "", $1); print $1; exit }' "$PROC_MOUNTS" 2>/dev/null || true)
+                fi
+                if [ -z "$dev_name" ] && [ -n "$volume_root" ] && [ "${target#"$volume_root"}" != "$target" ]; then
+                    dev_name=$(awk -v t="${target#"$volume_root"}" '$2 == t { sub("^/dev/", "", $1); print $1; exit }' "$PROC_MOUNTS" 2>/dev/null || true)
+                fi
+            else
+                dev_name=$(mount 2>/dev/null | awk -v t="$target" '$3 == t { sub("^/dev/", "", $1); print $1; exit }' || true)
+            fi
+            ;;
+        *)
+            dev_name="${target#/dev/}"
+            ;;
+    esac
 
-    # 2. If no device was found, return error (1 as HDD)
     if [ -z "$dev_name" ]; then
         echo "1"
         return
     fi
 
-    # 3. Find the first physical disk in RAID
-    local first_slave=$(ls "/sys/block/$dev_name/slaves" 2>/dev/null | head -n 1)
-    # Clean up dev_name from possible @ and everything after (e.g. sdd4@ -> sdd4)
-    first_slave=$(echo "$first_slave" | sed 's/@.*//')
+    if [ -d "$sys_block_dir/$dev_name/slaves" ]; then
+        first_slave=$(ls -1 "$sys_block_dir/$dev_name/slaves" 2>/dev/null | head -n 1 || true)
+        first_slave=$(printf '%s\n' "$first_slave" | sed 's/@.*//')
+    fi
 
     if [ -z "$first_slave" ]; then
-        # If it's not RAID, but a regular disk (e.g., sda)
-        if [ -e "/sys/block/$dev_name/queue/rotational" ]; then
-            cat "/sys/block/$dev_name/queue/rotational"
-        else
-            echo "1"
+        base_disk=$(resolve_base_block_device "$dev_name")
+        if [ -r "$sys_block_dir/$dev_name/queue/rotational" ]; then
+            rot_file="$sys_block_dir/$dev_name/queue/rotational"
+        elif [ -n "$base_disk" ] && [ -r "$sys_block_dir/$base_disk/queue/rotational" ]; then
+            rot_file="$sys_block_dir/$base_disk/queue/rotational"
         fi
     else
-        # If it's RAID, check the slave
-        # If first_slave is a partition (e.g., sdd4), get the base disk (e.g., sdd)
-        base_disk=$(echo "$first_slave" | sed 's/[0-9]*$//')
-        if [ -n "$base_disk" ] && [ -e "/sys/block/$base_disk/queue/rotational" ]; then
-            cat "/sys/block/$base_disk/queue/rotational"
-        elif [ -e "/sys/block/$first_slave/queue/rotational" ]; then
-            cat "/sys/block/$first_slave/queue/rotational"
-        else
-            echo "1"
+        base_disk=$(resolve_base_block_device "$first_slave")
+        if [ -n "$base_disk" ] && [ -r "$sys_block_dir/$base_disk/queue/rotational" ]; then
+            rot_file="$sys_block_dir/$base_disk/queue/rotational"
+        elif [ -r "$sys_block_dir/$first_slave/queue/rotational" ]; then
+            rot_file="$sys_block_dir/$first_slave/queue/rotational"
         fi
+    fi
+
+    if [ -n "$rot_file" ]; then
+        rot_val=$(tr -d ' \t\r\n' < "$rot_file" 2>/dev/null || true)
+    fi
+
+    if [ "$rot_val" = "0" ]; then
+        echo "0"
+    else
+        echo "1"
     fi
 }
 
@@ -287,17 +327,30 @@ get_volume_rotational() {
 # Function to get volumes and their details in JSON format
 ####################################################################
 get_volumes_json() {
+    local df_bin="${DF_BIN:-df}"
+    local volumes_root="${VOLUMES_ROOT:-}"
     local VOLUMES=""
     local FIRST=1
+    local VOL_DIR VOL DF_LINE MOUNT_POINT TOTAL FREE USE_PCT
+    local VOL_ESC MOUNT_ESC FREE_ESC TOTAL_ESC USE_PCT_ESC IS_SSD IS_SSD_BOOL
 
-    for VOL in /volume[0-9]*; do
-        [ -d "$VOL" ] || continue
+    volumes_root="${volumes_root%/}"
 
-        DF_LINE=$(df -h "$VOL" 2>/dev/null | awk 'NR==2')
-        MOUNT_POINT=$(echo "$DF_LINE" | awk '{print $1}')
-        TOTAL=$(echo "$DF_LINE" | awk '{print $2}')
-        FREE=$(echo "$DF_LINE" | awk '{print $4}')
-        USE_PCT=$(echo "$DF_LINE" | awk '{print $5}')
+    for VOL_DIR in "${volumes_root}"/volume[0-9]*; do
+        [ -d "$VOL_DIR" ] || continue
+
+        VOL="${VOL_DIR#"${volumes_root}"}"
+
+        DF_LINE=$( ("$df_bin" -Ph "$VOL_DIR" 2>/dev/null || "$df_bin" -h "$VOL_DIR" 2>/dev/null || true) | awk '
+            NR == 1 { next }
+            NF == 1 { dev = $1; next }
+            dev != "" { print dev, $0; dev = ""; exit }
+            { print; exit }
+        ')
+        MOUNT_POINT=$(printf '%s\n' "$DF_LINE" | awk '{print $1}')
+        TOTAL=$(printf '%s\n' "$DF_LINE" | awk '{print $2}')
+        FREE=$(printf '%s\n' "$DF_LINE" | awk '{print $4}')
+        USE_PCT=$(printf '%s\n' "$DF_LINE" | awk '{print $5}')
 
         VOL_ESC=$(json_escape "$VOL")
         MOUNT_ESC=$(json_escape "$MOUNT_POINT")
@@ -306,14 +359,14 @@ get_volumes_json() {
         USE_PCT_ESC=$(json_escape "$USE_PCT")
 
         # Get SSD info (0=SSD, 1=HDD)
-        IS_SSD=$(get_volume_rotational "$VOL")
+        IS_SSD=$(get_volume_rotational "$VOL_DIR")
         if [ "$IS_SSD" = "0" ]; then
             IS_SSD_BOOL=true
         else
             IS_SSD_BOOL=false
         fi
 
-        [ $FIRST -eq 0 ] && VOLUMES="$VOLUMES,"
+        [ "$FIRST" -eq 0 ] && VOLUMES="$VOLUMES,"
         FIRST=0
 
         VOLUMES="$VOLUMES{
@@ -326,7 +379,7 @@ get_volumes_json() {
         }"
     done
 
-    echo "$VOLUMES"
+    printf '%s\n' "$VOLUMES"
 }
 
 ####################################################################

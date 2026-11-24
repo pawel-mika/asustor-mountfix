@@ -349,7 +349,7 @@ To avoid merge conflicts in `webman/scripts/common.sh` and `webman/mf_actions.js
 
 4. **Branch 4: `chore/lifecycle-and-repo-hygiene`** *(installer hooks, build tooling & repository cleanup)*
    - **Commit 1 (`F15` + `F10` lifecycle):** Add Entware `PATH` and independent `jq`/`bash`/`rsync` checks in `CONTROL/pre-install.sh`, block package uninstall when bind mounts are active in `CONTROL/pre-uninstall.sh`, and clear pre-selected `docker-ce` from the shipped default `etc/mountfix.conf`.
-   - **Commit 2 (`F10` build + `F11` remainder + repo cleanup):** Stop `build.sh` from dirtying tracked JS/version files on every local build, make `sysctl` writeback tuning an explicit config/UI option, and clean up untracked `tools/` plus merged legacy branches.
+   - **Commit 2 (`F10` build + `F11` remainder + repo cleanup):** Stop `build.sh` from dirtying tracked JS/version files on every local build, make `sysctl` writeback tuning an explicit config/UI option, remove the temporary `CONTROL/common.sh` compatibility shim, and clean up untracked `tools/` plus merged legacy branches.
 
 ---
 
