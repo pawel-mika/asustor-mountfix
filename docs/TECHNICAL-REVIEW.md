@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Date** | 2026-11-19 (updated 2026-11-24) |
-| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 implemented & verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branch 1 implemented in `0.0.0.106` (installed on NAS, see §8) |
+| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 implemented & verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branch 1 implemented in `0.0.0.106` (installed on NAS, see §8); Stage 2 Branch 2 implemented in `0.0.0.107` (`fix/transfer-engine`, see §9) |
 | **Scope** | Whole repository: `CONTROL/`, `webman/` (CGI + shell library + ExtJS UI), `build.sh` / `buildJs.sh`, `tests/`, `etc/` |
-| **Status** | **Stage 1 complete & production-verified** (`F1`, `F2`, `F11` start-only `sysctl`, persistent logging, ADM syslog warnings, shutdown-aware cleanup). **Stage 2 Branch 1 implemented (`0.0.0.106`, installed on NAS):** `F5`, `F6`, `F7`, `F13`, `F14` and the shell items of `F17` (see §8). **Remaining:** `F3`, `F4`, `F8`, `F9`, `F10`, `F11` (UI option), `F12`, `F15`, `F16` and the JS items of `F17`. |
+| **Status** | **Stage 1 complete & production-verified** (`F1`, `F2`, `F11` start-only `sysctl`, persistent logging, ADM syslog warnings, shutdown-aware cleanup). **Stage 2 Branch 1 implemented (`0.0.0.106`, installed on NAS):** `F5`, `F6`, `F7`, `F13`, `F14` and the shell items of `F17` (see §8). **Stage 2 Branch 2 implemented (`0.0.0.107`, `fix/transfer-engine`):** `F4`, `F8`, `F12` (see §9). **Remaining:** `F3`, `F9`, `F10`, `F11` (UI option), `F15`, `F16` and the JS items of `F17`. |
 
 ---
 
@@ -324,21 +324,21 @@ The script changes system-wide kernel settings on **every** invocation (includin
 | 3 | **F11** `sysctl` tuning on `start` only | 🟡 **Partial (`0.0.0.103`)** | Moved out of `stop` so shutdown never alters dirty writeback timers; UI toggle / restore on uninstall still optional. |
 | 4 | **F6** Shared POSIX shell library (`CONTROL/lib.sh`) | ✅ **Done (`0.0.0.106`)** | `CONTROL/lib.sh` is sourced by `start-stop.sh`, `post-install.sh` and `webman/scripts/common.sh`. `CONTROL/common.sh` is a temporary shim — **remove in Branch 4**. |
 | 5 | **F3** Runtime mount state = boot config (`mount.cgi` updates config + `mounts.list`, mismatch warning in grid) | ⏳ Pending (Stage 2) | Prevents UI mount without *Apply* from diverging on reboot. |
-| 6 | **F4**, **F12** Safe `rsync` flags (`-aHAX`), server-side running check, non-blocking `migrate.cgi` background FD redirection | ⏳ Pending (Stage 2) | Protects Docker `overlay2` xattrs/hardlinks and prevents HTTP hang during large transfers. |
+| 6 | **F4**, **F12** Safe `rsync` flags (`-aHAX`), server-side running check, non-blocking `migrate.cgi` background FD redirection | ✅ **Done (`0.0.0.107`)** | Detached background subshell (`</dev/null >/dev/null 2>&1 &`), unbuffered progress streaming, `detect_rsync_flags` (`-aH --numeric-ids` + probed `-A`/`-X`/`--outbuf=L`), mirror `--delete` with UI confirmations, and `ensure_app_not_busy` across migrate/sync-back/mount/unmount. |
 | 7 | **F13**, **F14**, **F15** NVMe SSD detection & `df -Ph`, self-relocation guard (`MountFix`), `pre-install.sh` `PATH` | 🟡 **Partial** — `F13`, `F14` ✅ done (`0.0.0.106`); `F15` ⏳ pending (Branch 4) | Unblocks NVMe volumes and prevents relocating `MountFix` itself. |
-| 8 | **F5**, **F7**, **F8** Config input validation, unified CGI JSON responses, atomic transfer lock + `DONE` marker | 🟡 **Partial** — `F5`, `F7` ✅ done (`0.0.0.106`); `F8` ⏳ pending (Branch 2) | Backend hardening and API consistency. `POST`-only enforcement for mutating CGIs is deferred to Branch 3 (needs `mf_actions.js` changes). |
+| 8 | **F5**, **F7**, **F8** Config input validation, unified CGI JSON responses, atomic transfer lock + `DONE` marker | ✅ **Done (`0.0.0.106`–`0.0.0.107`)** | `F5`, `F7` in `0.0.0.106`; `F8` in `0.0.0.107` (atomic `/tmp/mountfix.lock` mutex with stale-lock recovery, `mktemp` error files/FIFOs, explicit `DONE`/`ERROR` state markers). `POST`-only enforcement for mutating CGIs is deferred to Branch 3 (needs `mf_actions.js` changes). |
 | 9 | **F9**, **F10**, **F16**, **F17** UI cleanup, double-`validate()` fix, single-app `du` optimization (`IDEAS.md` §1), `pre-uninstall.sh` mount guard | ⏳ Pending (Stage 2) | UX responsiveness and repository hygiene. |
 
 ### 4.1 Stage 2 Execution Plan (Agreed Branch & Commit Grouping)
 
 To avoid merge conflicts in `webman/scripts/common.sh` and `webman/mf_actions.js` and avoid 15 separate `.apk` deployments on the NAS, Stage 2 work is grouped into **4 sequential feature branches** (1 branch = 1 `.apk` release verification), each structured into **2–3 small, revertible atomic commits**:
 
-1. **Branch 1: `refactor/shared-lib-and-cgi-hardening`** *(backend foundation — implement first so subsequent branches target a single library)*
+1. **Branch 1: `refactor/shared-lib-and-cgi-hardening`** ✅ **Done (`0.0.0.106`, merged to `master`, see §8)** *(backend foundation — implement first so subsequent branches target a single library)*
    - **Commit 1 (`F6` + `F14` + shell items from `F17`):** Extract shared POSIX `CONTROL/lib.sh` (path builders, validators, `is_app_bind_mounted`, `pids_using_paths`), block self-relocation of `MountFix` (with warning note for `entware`), fix `url_decode` (`printf '%b'` + case-insensitive hex), and remove `readonly` re-sourcing traps.
    - **Commit 2 (`F5` + `F7`):** Introduce unified `send_json` response helper with proper escaping, validate inputs across `save_mountfix_config` and all `webman/*.cgi`, handle unknown `act` actions, normalize `*.cgi` permissions to `755`, remove hard-coded fallback version in `config.cgi`, and verify/enforce ADM `sid` session authentication.
    - **Commit 3 (`F13`):** Fix NVMe partition-to-disk resolution (`nvme0n1p1` → `nvme0n1`) in `get_volume_rotational` and use `df -Ph` in `get_volumes_json`.
 
-2. **Branch 2: `fix/transfer-engine`** *(data migration & sync-back engine — touches the same ~80 lines of `start_app_transfer` / `start_app_sync_back`)*
+2. **Branch 2: `fix/transfer-engine`** ✅ **Done (`0.0.0.107`, see §9)** *(data migration & sync-back engine — touches the same ~80 lines of `start_app_transfer` / `start_app_sync_back`)*
    - **Commit 1 (`F12` + `F8`):** Redirect background subshell FDs (`</dev/null >/dev/null 2>&1`) so `migrate.cgi` returns immediately, avoid block-buffered `tr` progress stalls, add atomic `/tmp/mountfix.lock` mutex, replace fixed `/tmp` filenames with `mktemp`, and emit explicit `DONE`/`ERROR` status markers after `wait`.
    - **Commit 2 (`F4`):** Switch transfers to `rsync -aHAX --numeric-ids` (after verifying `-A`/`-X` support on the target NAS), unify destination path handling before enabling optional `--delete` mirror mode, and enforce a server-side `pids_using_paths` check rejecting transfers/mounts/unmounts while processes hold the app directory.
 
@@ -565,3 +565,28 @@ Implemented as 3 atomic commits plus one fix wave, each task reviewed (spec + qu
 - **Branch 3:** `entware` relocation warning in the UI; `POST`-only mutating CGIs together with `mf_actions.js`.
 - **Deferred minors:** `url_decode` turns `%00` into an empty string (all decoded values are validated afterwards); `get_volume_rotational` relies on `PROC_MOUNTS` set by `lib.sh`.
 - **Not verified live:** an authenticated UI session (volumes, app list, *Apply*, *Copy to target* with an existing target directory) after `0.0.0.106`. Multi-layer LVM (`dm-*`) volumes without direct `slaves/` fall back to HDD.
+
+
+---
+
+## 9. Stage 2 — Branch 2 Results (`fix/transfer-engine`, `0.0.0.107`)
+
+Implemented as 2 atomic commits plus a version bump, verified locally with expanded behavioural tests (`tests/test_sync_back.sh`, `tests/test_ui_build.sh`).
+
+| Commit | Findings | Summary |
+|---|---|---|
+| `3623346` | `F12`, `F8` | Detached background subshell (`</dev/null >/dev/null 2>&1 &` + `trap '' HUP`) so `migrate.cgi` returns immediately; unbuffered `_stream_rsync_progress` (`stdbuf -oL tr` + `awk` fallback); atomic `/tmp/mountfix.lock` mutex with `pid`/`owner` and stale-lock recovery; `mktemp` for mount/umount error files and per-transfer FIFO dir; atomic status writes (`_write_status_atomic`) with explicit `DONE` / `ERROR` markers and `state` / `pid` fields in `get_transfer_status_json()`; UI finishes only on `state === 'done'` (never prematurely at `100%`). |
+| `c03e171` | `F4` | `detect_rsync_flags()` uses `-aH --numeric-ids` and probes both `rsync --version` and a live `--dry-run` on source/destination before enabling `-A`, `-X`, and `--outbuf=L`; dropped unsafe `-u`; unified trailing-slash app paths (`"$src/" "$dst/"`) before enabling `--delete` mirror mode on sync-back and `force=1` copy; added `ensure_app_not_busy()` (`pids_using_paths`) guard across `start_app_transfer`, `start_app_sync_back`, `mount_app`, and `unmount_app`; updated UI confirmation dialogs (`mf_actions.js` / `mountfix.js`) to warn explicitly about mirror mode (`--delete`) on forced copy, standalone sync-back, and unmount & sync-back. |
+| `437ee7c` | release | Bumped package version to `0.0.0.107` (`CONTROL/config.json`, `webman/mf_core.js`, `webman/mountfix.js`). |
+
+### 9.1 Key design points
+
+- **Non-blocking CGI:** `RESPONSE=$(start_app_transfer ...)` returns in `< 0.5 s` while `rsync` continues in the background; `trap` on `EXIT` cleans up both the `mktemp -d` FIFO directory and `/tmp/mountfix.lock` (guarded by `owner` token so an exiting job never releases another job's lock).
+- **Safe mirror semantics:** `start_app_transfer` always targets `$tgt_app/` (creating it if missing) rather than the parent `/volumeX/AppCentral`, preventing `--delete` from ever affecting sibling apps.
+- **Filesystem-aware `-A`/`-X`:** `detect_rsync_flags` falls back cleanly to `-aH --numeric-ids` (or `-aHX` / `-aHA`) if the NAS `rsync` build or underlying filesystem rejects ACLs or xattrs during the `--dry-run` probe.
+
+### 9.2 Open items carried forward
+
+- **Pending live NAS verification (`0.0.0.107`):** Build `.apk` and verify on ADM 5.1.5 that Entware `rsync` capability probing (`-A`/`-X`/`--outbuf=L`), non-blocking progress polling, and mirror-mode confirmations behave as expected on real volumes.
+- **Branch 3 (`fix/ui-state-and-validation`):** `F3`, `F9`, `F16`, JS items of `F17`, `IDEAS.md` §1, `entware` relocation warning, and `POST`-only mutating CGIs.
+- **Branch 4 (`chore/lifecycle-and-repo-hygiene`):** `F15`, `F10`, `F11` (UI option), and removal of the `CONTROL/common.sh` shim.
