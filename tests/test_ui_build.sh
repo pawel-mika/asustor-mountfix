@@ -55,7 +55,11 @@ const sandbox = {
         ARC: {
             util: {
                 getUserAppsPath: () => '/portal/apis/apps/',
-                getApiUrlWithSid: (url) => url,
+                getApiUrlWithSid: (url, params) => {
+                    if (!params) return url;
+                    const qs = Object.keys(params).map((k) => `${k}=${params[k]}`).join('&');
+                    return `${url}?${qs}`;
+                },
             },
             ajax: (opts) => {
                 // Simulate ADM AS.ARC.ajax: top-level success===false routes to options.failure(d)
@@ -69,6 +73,7 @@ const sandbox = {
     },
     Ext: {
         define: (name, proto) => { actionsProto = proto; },
+        apply: Object.assign,
         encode: JSON.stringify,
         defer: () => {},
         Array: {
@@ -236,7 +241,7 @@ p.syncBackSelectedApp(null, true);
 assert.strictEqual(createdDialogs.length, 0, 'skipConfirm=true must not open a second confirmation dialog');
 assert.strictEqual(ajaxCalls, 1);
 
-// 11. unmountSelectedApp "Unmount & Sync-back" skips duplicate confirmation
+// 11. unmountSelectedApp "Unmount & Sync-back" skips duplicate confirmation and does NOT run validate() in parallel (F16)
 createdDialogs = [];
 ajaxCalls = 0;
 p = makePage();
@@ -249,6 +254,46 @@ nextAjaxResponse = { success: true, message: 'Unmounted' };
 createdDialogs[0].cfg.fbar[0].handler();
 assert.strictEqual(createdDialogs.length, 1, 'Unmount & Sync-back must not open a second confirmation dialog');
 assert.strictEqual(ajaxCalls, 2, 'Should have called mount.cgi unmount + migrate.cgi sync_back');
+assert.strictEqual(p.validateCalls.length, 0, 'Unmount & Sync-back must NOT fire validate() in parallel with sync-back');
+
+// 12. Standalone bindMountAction passes appName to validate(app)
+p = makePage();
+const validatedApps = [];
+p.validate = (appName) => { validatedApps.push(appName); };
+nextAjaxResponse = { success: true, message: 'Mounted' };
+p.bindMountAction('mount', 'Mounting...', 'Mounted');
+assert.deepStrictEqual(validatedApps, ['docker-ce'], 'bindMountAction without callback must call validate(app)');
+
+// 13. validate(appName) passes app query param and does not push onto maskStack (non-blocking)
+let lastAjaxUrl = '';
+sandbox.AS.ARC.ajax = (opts) => {
+    lastAjaxUrl = opts.url;
+    origAjax(opts);
+};
+p = makePage();
+p.validate = actionsProto.validate;
+nextAjaxResponse = { success: true, apps: [] };
+p.validate('docker-ce');
+assert(lastAjaxUrl.includes('app=docker-ce'), 'validate(appName) must pass app=docker-ce, got: ' + lastAjaxUrl);
+assert.strictEqual(p.maskStack.length, 0, 'validate() must be non-blocking (no modal mask)');
+
+// 14. setMfConfig suspends combo events around setValue (no double validate on open)
+const comboEvents = [];
+p = makePage();
+p.win.down = (sel) => {
+    if (sel === 'combo[name=targetVolume]') {
+        return {
+            getStore: () => ({ loadData() {} }),
+            suspendEvents: () => comboEvents.push('suspend'),
+            setValue: (v) => comboEvents.push('set:' + v),
+            resumeEvents: () => comboEvents.push('resume'),
+        };
+    }
+    if (sel === '#appGrid') return { getStore: () => ({ loadData() {} }) };
+    return null;
+};
+p.setMfConfig({ config: { targetVolume: '/volume2', selectedApps: [] }, apps: [], volumes: [{ volume: '/volume2' }] });
+assert.deepStrictEqual(comboEvents, ['suspend', 'set:/volume2', 'resume'], 'setMfConfig must suspend/resume combo events');
 sandbox.AS.ARC.ajax = origAjax;
 EOF
 fi

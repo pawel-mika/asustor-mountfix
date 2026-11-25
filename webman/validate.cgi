@@ -38,6 +38,10 @@ if [ "$ACTION" = "get" ]; then
         exit 0
     fi
 
+    DU_BIN="${DU_BIN:-du}"
+    SRC_DU_CACHE=""
+    TGT_DU_CACHE=""
+
     if [ -n "$APP_PARAM" ]; then
         APP_SINGLE=$(get_app_plugin_path "$APP_PARAM")
         if [ ! -d "$APP_SINGLE" ]; then
@@ -47,7 +51,30 @@ if [ "$ACTION" = "get" ]; then
         set -- "$APP_SINGLE"
     else
         set -- "$SRC_BASE"/*
+        # Batch source and target du -sk into one invocation per volume
+        SRC_DU_CACHE=$("$DU_BIN" -sk "$SRC_BASE"/* 2>/dev/null || true)
+        if [ -n "$TARGET_VOL" ]; then
+            TARGET_BASE="${VOLUME_ROOT:-}$TARGET_VOL/$DIR_APP_CENTRAL"
+            if [ -d "$TARGET_BASE" ]; then
+                TGT_DU_CACHE=$("$DU_BIN" -sk "$TARGET_BASE"/* 2>/dev/null || true)
+            fi
+        fi
     fi
+
+    lookup_du_kb() {
+        local cache="$1"
+        local path="$2"
+        printf '%s\n' "$cache" | awk -v p="$path" '
+            {
+                kb = $1
+                sub(/^[0-9]+[[:space:]]+/, "")
+                if ($0 == p) {
+                    print kb
+                    exit
+                }
+            }
+        '
+    }
 
     CONFIGURED_APPS=$(get_configured_apps_for_volume "$TARGET_VOL")
     APPS_JSON=""
@@ -58,11 +85,15 @@ if [ "$ACTION" = "get" ]; then
         APP_NAME=$(basename "$APP_DIR")
         is_protected_app "$APP_NAME" && continue
 
-        SRC_SIZE=$(get_size_human "$APP_DIR")
-        SRC_SIZE_KB=$(get_size_kb "$APP_DIR")
+        if [ -n "$APP_PARAM" ]; then
+            SRC_SIZE_KB=$(get_size_kb "$APP_DIR")
+        else
+            SRC_SIZE_KB=$(lookup_du_kb "$SRC_DU_CACHE" "$APP_DIR")
+        fi
         case "$SRC_SIZE_KB" in
             ''|*[!0-9]*) SRC_SIZE_KB=0 ;;
         esac
+        SRC_SIZE=$(format_kb_human "$SRC_SIZE_KB")
 
         TARGET_SIZE="0"
         TARGET_SIZE_KB=0
@@ -73,11 +104,15 @@ if [ "$ACTION" = "get" ]; then
             TARGET_PATH=$(get_app_data_path "$TARGET_VOL" "$APP_NAME")
             if [ -d "$TARGET_PATH" ]; then
                 EXISTS_IN_TARGET="true"
-                TARGET_SIZE=$(get_size_human "$TARGET_PATH")
-                TARGET_SIZE_KB=$(get_size_kb "$TARGET_PATH")
+                if [ -n "$APP_PARAM" ]; then
+                    TARGET_SIZE_KB=$(get_size_kb "$TARGET_PATH")
+                else
+                    TARGET_SIZE_KB=$(lookup_du_kb "$TGT_DU_CACHE" "$TARGET_PATH")
+                fi
                 case "$TARGET_SIZE_KB" in
                     ''|*[!0-9]*) TARGET_SIZE_KB=0 ;;
                 esac
+                TARGET_SIZE=$(format_kb_human "$TARGET_SIZE_KB")
             fi
             MOUNTED=$(check_app_mount_json "$TARGET_VOL" "$APP_NAME")
         fi

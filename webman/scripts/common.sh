@@ -17,15 +17,28 @@ elif [ -f "/volume1/.@plugins/AppCentral/MountFix/CONTROL/lib.sh" ]; then
 fi
 
 ####################################################################
-# Function to get size in human readable format
+# Format size in KB into a human-readable string (no extra du call)
 ####################################################################
-get_size_human() {
-    local dir="$1"
-    if [ -d "$dir" ]; then
-        du -sh "$dir" 2>/dev/null | awk '{print $1}'
-    else
+format_kb_human() {
+    local kb="${1:-0}"
+    case "$kb" in
+        ''|*[!0-9]*) kb=0 ;;
+    esac
+    if [ "$kb" -eq 0 ]; then
         echo "0"
+        return
     fi
+    awk -v kb="$kb" 'BEGIN {
+        if (kb < 1024) {
+            printf "%dK\n", kb
+        } else if (kb < 1048576) {
+            printf "%.1fM\n", kb / 1024.0
+        } else if (kb < 1073741824) {
+            printf "%.1fG\n", kb / 1048576.0
+        } else {
+            printf "%.1fT\n", kb / 1073741824.0
+        }
+    }'
 }
 
 ####################################################################
@@ -33,8 +46,9 @@ get_size_human() {
 ####################################################################
 get_size_kb() {
     local dir="$1"
+    local du_bin="${DU_BIN:-du}"
     if [ -d "$dir" ]; then
-        du -sk "$dir" 2>/dev/null | awk '{print $1}'
+        "$du_bin" -sk "$dir" 2>/dev/null | awk '{print $1}'
     else
         echo "0"
     fi

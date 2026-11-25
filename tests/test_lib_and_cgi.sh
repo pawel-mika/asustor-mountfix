@@ -881,4 +881,47 @@ jq -e '
     ((.apps[] | select(.name == "docker-ce") | .mismatch) == null)
 ' >/dev/null <<<"$F3_VAL_MNT_ONLY" || fail "F3 validate.cgi mounted_not_configured mismatch: $F3_VAL_MNT_ONLY"
 
-echo "PASS: All shared library, F14 protection, url_decode, JSON helper, CGI hardening, F13 NVMe/df, and F3 mount-config sync tests passed."
+# ---------------------------------------------------------------------------
+# 14. IDEAS §1: validate.cgi uses single-pass batched du -sk (never du -sh)
+# ---------------------------------------------------------------------------
+echo "Test 14: validate.cgi single-pass batched du -sk and format_kb_human..."
+(
+    # shellcheck disable=SC1091
+    . "$REPO_ROOT/webman/scripts/common.sh"
+    [ "$(format_kb_human 0)" = "0" ] || fail "format_kb_human 0 failed"
+    [ "$(format_kb_human 512)" = "512K" ] || fail "format_kb_human 512 failed"
+    [ "$(format_kb_human 1536)" = "1.5M" ] || fail "format_kb_human 1536 failed"
+    [ "$(format_kb_human 2097152)" = "2.0G" ] || fail "format_kb_human 2097152 failed"
+)
+
+DU_CALL_LOG="$F3_ENV/du_calls.log"
+MOCK_DU="$F3_ENV/mock_du.sh"
+cat <<EOF > "$MOCK_DU"
+#!/bin/sh
+echo "\$*" >> "$DU_CALL_LOG"
+exec /usr/bin/du "\$@"
+EOF
+chmod 755 "$MOCK_DU"
+
+: > "$DU_CALL_LOG"
+VAL_BATCH=$(assert_cgi_json "$(
+    DU_BIN="$MOCK_DU" \
+    DIR_VOL1="$F3_VOL1" \
+    VOLUME_ROOT="$F3_VOL_ROOT" \
+    CONFIG_FILE="$F3_ETC/mountfix.conf" \
+    MF_CONFIG_DIR="$F3_ETC" \
+    QUERY_STRING="$VALID_SID&act=get&target=/volume2" \
+    ADM_AUTH_CGI="$MOCK_ADM_AUTH" \
+    MOUNTFIX_WEBMAN_COMMON_SH="$REPO_ROOT/webman/scripts/common.sh" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
+    sh "$REPO_ROOT/webman/validate.cgi"
+)" "validate.cgi batched du")
+DU_CALL_COUNT=$(wc -l < "$DU_CALL_LOG" | tr -d ' ')
+[ "$DU_CALL_COUNT" -le 2 ] || fail "Expected <=2 batched du -sk calls for full validate, got $DU_CALL_COUNT: $(cat "$DU_CALL_LOG")"
+if grep -q -- '-sh' "$DU_CALL_LOG"; then
+    fail "validate.cgi must not invoke du -sh: $(cat "$DU_CALL_LOG")"
+fi
+jq -e '.success == true and (.apps | length == 2) and (.apps[0].sourceSize | length > 0)' >/dev/null <<<"$VAL_BATCH" || \
+    fail "validate.cgi batched output invalid: $VAL_BATCH"
+
+echo "PASS: All shared library, F14 protection, url_decode, JSON helper, CGI hardening, F13 NVMe/df, F3, and batched du tests passed."

@@ -118,20 +118,22 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         });
     },
 
-    validate: function () {
+    validate: function (appName) {
         var page = this;
         var target = page.getSelectedVolume();
-        var actionMsg = 'Validating configuration...';
-        page.maskWindow(actionMsg);
+        var params = {
+            act: 'get',
+            target: target,
+        };
+        if (appName) {
+            params.app = appName;
+        }
+        page.updateStatus('Validating' + (appName ? ' ' + appName : '') + '...', false);
 
         AS.ARC.ajax({
-            url: AS.ARC.util.getApiUrlWithSid(page.validateApiUrl, {
-                act: 'get',
-                target,
-            }),
+            url: AS.ARC.util.getApiUrlWithSid(page.validateApiUrl, params),
             method: 'GET',
             success: function (json) {
-                console.log('validated:', json);
                 if (json.success && json.apps) {
                     var grid = page.win.down('#appGrid');
                     if (grid) {
@@ -151,11 +153,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                     }
                 }
                 page.updateActionsUI();
-                page.unmaskWindow(actionMsg);
             },
             failure: function () {
-                console.error('Failed to load validation data');
-                page.unmaskWindow(actionMsg);
+                page.updateStatus('Error: Failed to load validation data', true);
             },
         });
     },
@@ -178,7 +178,13 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             var combo = page.win.down('combo[name=targetVolume]');
             if (combo) {
                 combo.getStore().loadData(newConfig.volumes);
+                if (combo.suspendEvents) {
+                    combo.suspendEvents();
+                }
                 combo.setValue(newConfig.config.targetVolume);
+                if (combo.resumeEvents) {
+                    combo.resumeEvents();
+                }
             }
         }
         if (newConfig.version) {
@@ -523,10 +529,11 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 page.unmaskWindow(actionMsg);
                 if (json && json.success) {
                     page.updateStatus(json.message || okMsg, false);
-                    page.validate();
                     page.updateActionsUI();
                     if (typeof onSuccessCallback === 'function') {
                         onSuccessCallback();
+                    } else {
+                        page.validate(app);
                     }
                 } else {
                     page.updateStatus('Error: ' + ((json && json.error) || 'Operation failed'), true);
@@ -583,7 +590,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                             clearInterval(intervalId);
                             page.unmaskAll();
                             page.updateStatus((actionLabel || 'Operation') + ' completed successfully', false);
-                            page.validate();
+                            page.validate(appName || app);
                             if (typeof callbackOnComplete === 'function') {
                                 callbackOnComplete();
                             }
