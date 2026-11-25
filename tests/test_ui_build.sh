@@ -30,6 +30,10 @@ for forbidden in "console.log('sync back')" "rsync -au" "window.qq" "getApps(" "
 done
 grep -q "taskIcon: '../apps/MountFix/images/icon-app-task.png'" webman/mountfix.js || { echo "FAIL: fixed taskIcon path missing"; exit 1; }
 grep -q "stopMigrationMonitor" webman/mountfix.js || { echo "FAIL: stopMigrationMonitor missing"; exit 1; }
+grep -q "type: 'help'" webman/mountfix.js || { echo "FAIL: ADM window header help tool missing"; exit 1; }
+if grep -qF "btnHelp" webman/mountfix.js; then
+    echo "FAIL: footer btnHelp button must not be present (use window header help tool)"; exit 1
+fi
 
 # Check that Target Directory Exists prompt helper is present and used on failure/success
 grep -q "promptTargetExists" webman/mountfix.js || { echo "FAIL: promptTargetExists missing from mountfix.js"; exit 1; }
