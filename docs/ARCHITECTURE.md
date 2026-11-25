@@ -204,5 +204,5 @@ ADM enforces a 60-second per-script shutdown timeout (`/etc/script/script_trap.s
 
 ## 5. Additional Architecture Topics
 
-For full audit history, field findings, and the remaining Stage 2 roadmap (UI-to-config synchronization, single-app validation optimization, lifecycle & repo hygiene), see [docs/TECHNICAL-REVIEW.md](TECHNICAL-REVIEW.md) and [IDEAS.md](../IDEAS.md).
+For full audit history, field findings, and the remaining roadmap (Branch 4 lifecycle & repo hygiene, and the post-Stage 2 *Delete target* workflow), see [docs/TECHNICAL-REVIEW.md](TECHNICAL-REVIEW.md) and [IDEAS.md](../IDEAS.md).
 

@@ -342,7 +342,7 @@ To avoid merge conflicts in `webman/scripts/common.sh` and `webman/mf_actions.js
    - **Commit 1 (`F12` + `F8`):** Redirect background subshell FDs (`</dev/null >/dev/null 2>&1`) so `migrate.cgi` returns immediately, avoid block-buffered `tr` progress stalls, add atomic `/tmp/mountfix.lock` mutex, replace fixed `/tmp` filenames with `mktemp`, and emit explicit `DONE`/`ERROR` status markers after `wait`.
    - **Commit 2 (`F4`):** Switch transfers to `rsync -aHAX --numeric-ids` (after verifying `-A`/`-X` support on the target NAS), unify destination path handling before enabling optional `--delete` mirror mode, and enforce a server-side `pids_using_paths` check rejecting transfers/mounts/unmounts while processes hold the app directory.
 
-3. **Branch 3: `fix/ui-state-and-validation`** ✅ **Done (`0.0.0.108`, see §10)** *(UI ↔ boot config consistency, responsiveness & JS cleanup)*
+3. **Branch 3: `fix/ui-state-and-validation`** ✅ **Done (`0.0.0.108`–`0.0.0.115`, merged to `master`, see §10)** *(UI ↔ boot config consistency, responsiveness & JS cleanup)*
    - **Commit 1 (`F3`):** Update `mount.cgi` so *Mount*/*Unmount* atomically updates `etc/mountfix.conf` and `etc/mounts.list` without requiring a separate *Apply* step, and expose `configured != mounted` mismatch warnings in `validate.cgi` and the ExtJS grid.
    - **Commit 2 (`F16` + `IDEAS.md` §1):** Suppress duplicate `validate()` firing on initial window open, stop running `validate()` concurrently with *Unmount & Sync-back*, pass single-app `validate(appName)` after per-app actions, and consolidate `du -sh` + `du -sk` into a single `du -sk` pass without full-window modal blocking.
    - **Commit 3 (`F9` + JS items from `F17`):** Move `maskStack` from prototype to instance, replace uncleaned `setInterval` polling with `beforeclose`-safe `setTimeout` chaining, remove dead `getApps()`/`apps.cgi` calls and debug leftovers (`window.qq`, `console.log`), drop unused POST body in `migrateSelectedApp`, and fix the `taskIcon` path typo.
@@ -590,7 +590,7 @@ Implemented as 2 atomic commits plus a version bump, verified locally with expan
 
 ### 9.2 Open items carried forward
 
-- **Pending live NAS verification (`0.0.0.107`+):** Build `.apk` and verify on ADM 5.1.5 that Entware `rsync` capability probing (`-A`/`-X`/`--outbuf=L`), non-blocking progress polling, and mirror-mode confirmations behave as expected on real volumes.
+- **Live NAS verification:** `0.0.0.107`–`0.0.0.115` installed and exercised on ADM 5.1.5 (see §10).
 - **Branch 4 (`chore/lifecycle-and-repo-hygiene`):** `F15`, `F10`, `F11` (UI option), and removal of the `CONTROL/common.sh` shim.
 
 ---
@@ -604,7 +604,7 @@ Implemented as 3 atomic commits plus live NAS UI/manifest polish (`0.0.0.109`–
 | `9735d3d` | `F3` | Added `update_mountfix_app_config()` and `get_configured_apps_for_volume()` in `webman/scripts/common.sh`; `mount_app` / `unmount_app` now atomically sync `etc/mountfix.conf` and `etc/mounts.list` (`configUpdated` in response); `validate.cgi` emits per-app `configured` and `mismatch` (`configured_not_mounted` / `mounted_not_configured`); ExtJS grid shows mismatch warnings and makes the `Boot` checkcolumn read-only. |
 | `48216ad` | `F16`, `IDEAS.md` §1 | Replaced dual `du -sh` + `du -sk` with batched single-pass `du -sk` and pure `awk` `format_kb_human()`; suspended combo events in `setMfConfig()` to stop double `validate()` on open; made `validate(appName)` non-blocking and targeted for per-app actions; removed the parallel `validate()` race during *Unmount & Sync-back*. |
 | `81a44c1` | `F9`, `F17` (JS), `F5` (`POST`), `entware` warning | Moved `maskStack` to instance constructor; replaced `setInterval` with `beforeclose`-safe chained `setTimeout` (`stopMigrationMonitor`); removed dead `getApps()`, `requestConfig()`, `appsApiUrl`, `window.qq`, `console.log`, and unused `getMfConfig()` body on `migrate`; fixed `taskIcon` path typo (`../apps/...`); added `confirmEntwareAction()` warning for `entware` copy/mount; enforced `require_post_method()` on all mutating CGIs (`config.cgi?act=set`, `mount.cgi`, `migrate.cgi?act=migrate|sync_back`). |
-| `bf6a1f0` + UI polish | Live NAS UX (`0.0.0.108`–`0.0.0.115`) | Persistent `Validating...` status until response + `record.commit()` (no dirty red cell markers); immediate `target_exists` prompt without double overlay; `#actionHint` for running apps; responsive landscape window sizing (`~80%` viewport height); left-anchored footer version via `dockedItems`; enlarged `AS.ARC.msgWindow` dialogs (`620×270–290`); right-aligned size columns with `—`; updated `CONTROL/description.txt` (disclaimer + website) and `CONTROL/config.json` (`https://mikedev.eu`). |
+| `bf6a1f0`, `84d70ff` | Live NAS UX (`0.0.0.108`–`0.0.0.115`) | Persistent `Validating...` status until response + `record.commit()` (no dirty red cell markers); immediate `target_exists` prompt without double overlay; `#actionHint` for running apps; responsive landscape window sizing (`~80%` viewport height); left-anchored footer version via `dockedItems`; enlarged `AS.ARC.msgWindow` dialogs (`620×270–290`); right-aligned size columns with `—`; updated `CONTROL/description.txt` (disclaimer + website) and `CONTROL/config.json` (`https://mikedev.eu`). |
 
 ### 10.1 Open items carried forward
 
