@@ -137,11 +137,15 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                     if (grid) {
                         var store = grid.getStore();
                         json.apps.forEach(function (app) {
+                            var updateData = Ext.apply({}, app);
+                            if (typeof app.configured === 'boolean') {
+                                updateData.selected = app.configured;
+                            }
                             var record = store.findRecord('name', app.name, 0, false, false, true);
                             if (record) {
-                                record.set(app);
+                                record.set(updateData);
                             } else {
-                                store.add(app);
+                                store.add(updateData);
                             }
                         });
                     }

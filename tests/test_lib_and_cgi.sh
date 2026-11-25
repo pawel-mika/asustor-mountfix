@@ -781,4 +781,104 @@ jq -e '
     (.volumes[1].volume == "/volume2" and .volumes[1].isSSD == true and .volumes[1].freeSpace == "796G")
 ' >/dev/null <<<"$CFG_VOLS_BODY" || fail "config.cgi volumes integration mismatch: $CFG_VOLS_BODY"
 
-echo "PASS: All shared library, F14 protection, url_decode, JSON helper, CGI hardening, and F13 NVMe/df tests passed."
+# ---------------------------------------------------------------------------
+# 13. F3: mount_app / unmount_app sync boot config & validate.cgi reports mismatch
+# ---------------------------------------------------------------------------
+echo "Test 13: F3 mount/unmount boot config sync and validate.cgi mismatch reporting..."
+F3_ENV="$TMP_DIR/f3_env"
+F3_VOL1="$F3_ENV/vol1"
+F3_VOL_ROOT="$F3_ENV/volumes"
+F3_ETC="$F3_ENV/etc"
+MOCK_MOUNT_OK="$F3_ENV/mock_mount.sh"
+MOCK_UMOUNT_OK="$F3_ENV/mock_umount.sh"
+
+mkdir -p \
+    "$F3_VOL1/.@plugins/AppCentral/docker-ce" \
+    "$F3_VOL1/.@plugins/AppCentral/entware" \
+    "$F3_VOL_ROOT/volume2/AppCentral/docker-ce" \
+    "$F3_VOL_ROOT/volume2/AppCentral/entware" \
+    "$F3_ETC"
+
+printf '{"targetVolume":"/volume2","selectedApps":[]}\n' > "$F3_ETC/mountfix.conf"
+: > "$F3_ETC/mounts.list"
+
+printf '#!/bin/sh\nexit 0\n' > "$MOCK_MOUNT_OK"
+printf '#!/bin/sh\nexit 0\n' > "$MOCK_UMOUNT_OK"
+chmod 755 "$MOCK_MOUNT_OK" "$MOCK_UMOUNT_OK"
+
+F3_MNT_OUT=$(
+    DIR_VOL1="$F3_VOL1" \
+    VOLUME_ROOT="$F3_VOL_ROOT" \
+    CONFIG_FILE="$F3_ETC/mountfix.conf" \
+    MF_CONFIG_DIR="$F3_ETC" \
+    PROC_ROOT="$TMP_DIR/empty_proc_f3" \
+    MOUNT_BIN="$MOCK_MOUNT_OK" \
+    sh -c 'mkdir -p "$PROC_ROOT" && . "$1/webman/scripts/common.sh" && mount_app "/volume2" "docker-ce"' _ "$REPO_ROOT"
+)
+jq -e '.success == true and .configUpdated == true' >/dev/null <<<"$F3_MNT_OUT" || \
+    fail "F3 mount_app did not update config: $F3_MNT_OUT"
+jq -e '.targetVolume == "/volume2" and ([.selectedApps[].name] == ["docker-ce"])' "$F3_ETC/mountfix.conf" >/dev/null || \
+    fail "F3 mountfix.conf missing docker-ce after mount_app: $(cat "$F3_ETC/mountfix.conf")"
+grep -qxF "$F3_VOL_ROOT/volume2/AppCentral/docker-ce:$F3_VOL1/.@plugins/AppCentral/docker-ce" "$F3_ETC/mounts.list" || \
+    fail "F3 mounts.list missing docker-ce after mount_app: $(cat "$F3_ETC/mounts.list")"
+
+# validate.cgi: docker-ce is configured but not actually bind-mounted -> configured_not_mounted
+F3_VAL_CFG_ONLY=$(assert_cgi_json "$(
+    DIR_VOL1="$F3_VOL1" \
+    VOLUME_ROOT="$F3_VOL_ROOT" \
+    CONFIG_FILE="$F3_ETC/mountfix.conf" \
+    MF_CONFIG_DIR="$F3_ETC" \
+    QUERY_STRING="$VALID_SID&act=get&target=/volume2" \
+    ADM_AUTH_CGI="$MOCK_ADM_AUTH" \
+    MOUNTFIX_WEBMAN_COMMON_SH="$REPO_ROOT/webman/scripts/common.sh" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
+    sh "$REPO_ROOT/webman/validate.cgi"
+)" "F3 validate.cgi configured_not_mounted")
+jq -e '
+    .success == true and
+    ((.apps[] | select(.name == "docker-ce") | .configured) == true) and
+    ((.apps[] | select(.name == "docker-ce") | .mismatch) == "configured_not_mounted") and
+    ((.apps[] | select(.name == "entware") | .configured) == false) and
+    ((.apps[] | select(.name == "entware") | .mismatch) == null)
+' >/dev/null <<<"$F3_VAL_CFG_ONLY" || fail "F3 validate.cgi configured_not_mounted mismatch: $F3_VAL_CFG_ONLY"
+
+# unmount_app removes docker-ce from mountfix.conf and mounts.list
+F3_UMNT_OUT=$(
+    DIR_VOL1="$F3_VOL1" \
+    VOLUME_ROOT="$F3_VOL_ROOT" \
+    CONFIG_FILE="$F3_ETC/mountfix.conf" \
+    MF_CONFIG_DIR="$F3_ETC" \
+    PROC_ROOT="$TMP_DIR/empty_proc_f3" \
+    UMOUNT_BIN="$MOCK_UMOUNT_OK" \
+    sh -c '. "$1/webman/scripts/common.sh" && unmount_app "/volume2" "docker-ce"' _ "$REPO_ROOT"
+)
+jq -e '.success == true and .configUpdated == true' >/dev/null <<<"$F3_UMNT_OUT" || \
+    fail "F3 unmount_app did not update config: $F3_UMNT_OUT"
+jq -e '(.selectedApps | length) == 0' "$F3_ETC/mountfix.conf" >/dev/null || \
+    fail "F3 mountfix.conf still contains docker-ce after unmount_app: $(cat "$F3_ETC/mountfix.conf")"
+[ ! -s "$F3_ETC/mounts.list" ] || fail "F3 mounts.list not emptied after unmount_app: $(cat "$F3_ETC/mounts.list")"
+
+# validate.cgi: simulated mounted_not_configured (entware reports mounted while not in config)
+F3_MOUNTED_COMMON="$F3_ENV/mounted_common.sh"
+cat <<EOF > "$F3_MOUNTED_COMMON"
+. "$REPO_ROOT/webman/scripts/common.sh"
+is_app_bind_mounted() { [ "\$2" = "entware" ]; }
+EOF
+F3_VAL_MNT_ONLY=$(assert_cgi_json "$(
+    DIR_VOL1="$F3_VOL1" \
+    VOLUME_ROOT="$F3_VOL_ROOT" \
+    CONFIG_FILE="$F3_ETC/mountfix.conf" \
+    MF_CONFIG_DIR="$F3_ETC" \
+    QUERY_STRING="$VALID_SID&act=get&target=/volume2" \
+    ADM_AUTH_CGI="$MOCK_ADM_AUTH" \
+    MOUNTFIX_WEBMAN_COMMON_SH="$F3_MOUNTED_COMMON" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
+    sh "$REPO_ROOT/webman/validate.cgi"
+)" "F3 validate.cgi mounted_not_configured")
+jq -e '
+    ((.apps[] | select(.name == "entware") | .configured) == false) and
+    ((.apps[] | select(.name == "entware") | .mismatch) == "mounted_not_configured") and
+    ((.apps[] | select(.name == "docker-ce") | .mismatch) == null)
+' >/dev/null <<<"$F3_VAL_MNT_ONLY" || fail "F3 validate.cgi mounted_not_configured mismatch: $F3_VAL_MNT_ONLY"
+
+echo "PASS: All shared library, F14 protection, url_decode, JSON helper, CGI hardening, F13 NVMe/df, and F3 mount-config sync tests passed."

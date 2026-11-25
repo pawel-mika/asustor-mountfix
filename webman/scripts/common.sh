@@ -234,6 +234,80 @@ save_mountfix_config() {
 }
 
 ####################################################################
+# Atomically add or remove an app from boot config (mountfix.conf + mounts.list)
+# Usage: update_mountfix_app_config <targetVolume> <appName> <add|remove>
+####################################################################
+update_mountfix_app_config() {
+    local target_vol="$1"
+    local app_name="$2"
+    local action="$3"
+    local jq_bin current_cfg updated_cfg
+
+    jq_bin=$(find_jq 2>/dev/null) || return 1
+    current_cfg=$(load_mountfix_config)
+
+    case "$action" in
+        add)
+            updated_cfg=$(printf '%s' "$current_cfg" | "$jq_bin" -c \
+                --arg vol "$target_vol" \
+                --arg app "$app_name" '
+                (if type == "object" then . else {} end)
+                | .targetVolume = $vol
+                | .selectedApps = (
+                    [(.selectedApps // [])[] | select(.name != $app)]
+                    + [{name: $app}]
+                )
+            ' 2>/dev/null) || return 1
+            ;;
+        remove)
+            updated_cfg=$(printf '%s' "$current_cfg" | "$jq_bin" -c \
+                --arg vol "$target_vol" \
+                --arg app "$app_name" '
+                (if type == "object" then . else {} end)
+                | .targetVolume = (if (.targetVolume // "") != "" then .targetVolume else $vol end)
+                | .selectedApps = [(.selectedApps // [])[] | select(.name != $app)]
+            ' 2>/dev/null) || return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    save_mountfix_config "$updated_cfg"
+}
+
+####################################################################
+# Return newline-delimited list of apps configured for boot on targetVolume
+####################################################################
+get_configured_apps_for_volume() {
+    local target_vol="${1:-}"
+    local config_file="${CONFIG_FILE:-/usr/local/AppCentral/MountFix/etc/mountfix.conf}"
+    local mounts_list="${MOUNTS_LIST_FILE:-$(dirname "$config_file")/mounts.list}"
+    local jq_bin
+
+    if [ -f "$config_file" ] && jq_bin=$(find_jq 2>/dev/null); then
+        "$jq_bin" -r --arg vol "$target_vol" '
+            if ($vol == "" or (.targetVolume // "") == $vol) then
+                (.selectedApps // [])[] | select(.enabled != false) | .name
+            else
+                empty
+            end
+        ' "$config_file" 2>/dev/null || true
+        return 0
+    fi
+
+    if [ -f "$mounts_list" ]; then
+        while IFS=: read -r src tgt; do
+            [ -n "$src" ] && [ -n "$tgt" ] || continue
+            case "$src" in \#*) continue ;; esac
+            if [ -z "$target_vol" ] || [ "${src#"$target_vol/"}" != "$src" ]; then
+                basename "$tgt"
+            fi
+        done < "$mounts_list"
+    fi
+}
+
+####################################################################
 # Resolve partition device name (SATA/SAS, NVMe, MMC) to base disk
 ####################################################################
 resolve_base_block_device() {
@@ -456,7 +530,8 @@ mount_app() {
         return 1
     }
 
-    if ! mount --bind "$bind_source" "$bind_target" 2>"$err_file"; then
+    local mount_bin="${MOUNT_BIN:-mount}"
+    if ! "$mount_bin" --bind "$bind_source" "$bind_target" 2>"$err_file"; then
         err=$(tr '\n' ' ' <"$err_file")
         rm -f "$err_file"
         err=$(json_escape "$err")
@@ -465,8 +540,13 @@ mount_app() {
     fi
     rm -f "$err_file"
 
-    printf '{"success": true, "message": "Mounted", "bindSource": "%s", "bindTarget": "%s"}\n' \
-        "$esc_source" "$esc_target"
+    local cfg_updated="true"
+    if ! update_mountfix_app_config "$target_volume" "$app_name" "add" >/dev/null 2>&1; then
+        cfg_updated="false"
+    fi
+
+    printf '{"success": true, "message": "Mounted", "bindSource": "%s", "bindTarget": "%s", "configUpdated": %s}\n' \
+        "$esc_source" "$esc_target" "$cfg_updated"
     return 0
 }
 
@@ -502,7 +582,8 @@ unmount_app() {
         return 1
     }
 
-    if ! umount "$bind_target" 2>"$err_file"; then
+    local umount_bin="${UMOUNT_BIN:-umount}"
+    if ! "$umount_bin" "$bind_target" 2>"$err_file"; then
         err=$(tr '\n' ' ' <"$err_file")
         rm -f "$err_file"
         err=$(json_escape "$err")
@@ -511,8 +592,13 @@ unmount_app() {
     fi
     rm -f "$err_file"
 
-    printf '{"success": true, "message": "Unmounted", "bindSource": "%s", "bindTarget": "%s"}\n' \
-        "$esc_source" "$esc_target"
+    local cfg_updated="true"
+    if ! update_mountfix_app_config "$target_volume" "$app_name" "remove" >/dev/null 2>&1; then
+        cfg_updated="false"
+    fi
+
+    printf '{"success": true, "message": "Unmounted", "bindSource": "%s", "bindTarget": "%s", "configUpdated": %s}\n' \
+        "$esc_source" "$esc_target" "$cfg_updated"
     return 0
 }
 

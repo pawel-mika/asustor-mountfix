@@ -137,11 +137,15 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                     if (grid) {
                         var store = grid.getStore();
                         json.apps.forEach(function (app) {
+                            var updateData = Ext.apply({}, app);
+                            if (typeof app.configured === 'boolean') {
+                                updateData.selected = app.configured;
+                            }
                             var record = store.findRecord('name', app.name, 0, false, false, true);
                             if (record) {
-                                record.set(app);
+                                record.set(updateData);
                             } else {
-                                store.add(app);
+                                store.add(updateData);
                             }
                         });
                     }
@@ -669,7 +673,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
 
         // Store for the list of applications in the Sources section
         var appStore = Ext.create('Ext.data.Store', {
-            fields: ['name', 'selected', 'enabled', 'status', 'sourceSize', 'targetSize', 'mounted', 'existsInTarget'],
+            fields: ['name', 'selected', 'enabled', 'status', 'sourceSize', 'targetSize', 'mounted', 'existsInTarget', 'configured', 'mismatch'],
             data: [],
         });
 
@@ -765,10 +769,13 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                             columns: [
                                 {
                                     xtype: 'checkcolumn',
-                                    text: 'Mount',
+                                    text: 'Boot',
                                     dataIndex: 'selected',
-                                    width: 60,
+                                    width: 55,
                                     resizable: false,
+                                    processEvent: function () {
+                                        return false;
+                                    },
                                 },
                                 {
                                     xtype: 'checkcolumn',
@@ -794,10 +801,16 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                 {
                                     text: 'Current Status',
                                     dataIndex: 'status',
-                                    width: 100,
+                                    width: 145,
                                     renderer: function (v, m, row) {
-                                        const { mounted, enabled } = row.data;
-                                        const val = mounted ? 'Mounted' : enabled ? 'Not ready' : 'Ready';
+                                        var data = row.data;
+                                        if (data.mismatch === 'mounted_not_configured') {
+                                            return '<span style="color:#d97706;" title="Mounted now, will not mount after reboot">Mounted (not in boot)</span>';
+                                        }
+                                        if (data.mismatch === 'configured_not_mounted') {
+                                            return '<span style="color:#d97706;" title="Configured for boot, but not currently mounted">Not mounted (in boot)</span>';
+                                        }
+                                        var val = data.mounted ? 'Mounted' : data.enabled ? 'Not ready' : 'Ready';
                                         var color = val === 'Ready' ? 'green' : 'gray';
                                         return '<span style="color:' + color + ';">' + val + '</span>';
                                     },

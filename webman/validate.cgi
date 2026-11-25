@@ -49,6 +49,7 @@ if [ "$ACTION" = "get" ]; then
         set -- "$SRC_BASE"/*
     fi
 
+    CONFIGURED_APPS=$(get_configured_apps_for_volume "$TARGET_VOL")
     APPS_JSON=""
     FIRST=1
 
@@ -81,6 +82,18 @@ if [ "$ACTION" = "get" ]; then
             MOUNTED=$(check_app_mount_json "$TARGET_VOL" "$APP_NAME")
         fi
 
+        CONFIGURED="false"
+        if printf '%s\n' "$CONFIGURED_APPS" | grep -qxF "$APP_NAME"; then
+            CONFIGURED="true"
+        fi
+
+        MISMATCH="null"
+        if [ "$CONFIGURED" = "true" ] && [ "$MOUNTED" = "null" ]; then
+            MISMATCH='"configured_not_mounted"'
+        elif [ "$CONFIGURED" = "false" ] && [ "$MOUNTED" != "null" ]; then
+            MISMATCH='"mounted_not_configured"'
+        fi
+
         APP_NAME_ESC=$(json_escape "$APP_NAME")
         SRC_SIZE_ESC=$(json_escape "$SRC_SIZE")
         TARGET_SIZE_ESC=$(json_escape "$TARGET_SIZE")
@@ -95,7 +108,9 @@ if [ "$ACTION" = "get" ]; then
             \"existsInTarget\": $EXISTS_IN_TARGET,
             \"targetSize\": \"$TARGET_SIZE_ESC\",
             \"targetSizeKb\": $TARGET_SIZE_KB,
-            \"mounted\": $MOUNTED
+            \"mounted\": $MOUNTED,
+            \"configured\": $CONFIGURED,
+            \"mismatch\": $MISMATCH
         }"
     done
 
