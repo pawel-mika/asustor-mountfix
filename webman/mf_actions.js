@@ -26,19 +26,22 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         var actionHint = this.win.down('#actionHint');
         if (!btnCopyToTarget) return;
 
+        const validating = (this._validatingCount || 0) > 0;
         if (this.selectedApp) {
             const mounted = !!this.selectedApp.get('mounted');
             const running = !!this.selectedApp.get('enabled');
             const existsInTarget = !!this.selectedApp.get('existsInTarget');
             const appName = this.selectedApp.get('name');
             btnCopyToTarget.setText('Copy to target: ' + appName);
-            // All actions (Copy, Mount, Unmount, Sync) require the app to be stopped to prevent filesystem conflicts
-            btnCopyToTarget.setDisabled(running || mounted);
-            btnMount.setDisabled(running || !existsInTarget || mounted);
-            btnUnmount.setDisabled(running || !mounted);
-            btnSyncBack.setDisabled(running || !existsInTarget || mounted);
+            // All actions (Copy, Mount, Unmount, Sync) require validation to finish and the app to be stopped
+            btnCopyToTarget.setDisabled(validating || running || mounted);
+            btnMount.setDisabled(validating || running || !existsInTarget || mounted);
+            btnUnmount.setDisabled(validating || running || !mounted);
+            btnSyncBack.setDisabled(validating || running || !existsInTarget || mounted);
             if (actionHint) {
-                if (running) {
+                if (validating) {
+                    actionHint.update('Validating configuration... actions are temporarily disabled.');
+                } else if (running) {
                     actionHint.update(
                         'Stop <b>' +
                             Ext.String.htmlEncode(appName) +
@@ -155,11 +158,15 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             page.updateStatus('Validating' + (appName ? ' ' + appName : '') + '...', false, true);
         }
 
+        page._validatingCount = (page._validatingCount || 0) + 1;
+        page.updateActionsUI();
+
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.validateApiUrl, params),
             method: 'GET',
             enableFailureReturn: true,
             success: function (json) {
+                page._validatingCount = Math.max(0, (page._validatingCount || 1) - 1);
                 if (json.success && json.apps) {
                     var grid = page.win.down('#appGrid');
                     if (grid) {
@@ -187,6 +194,8 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 }
             },
             failure: function () {
+                page._validatingCount = Math.max(0, (page._validatingCount || 1) - 1);
+                page.updateActionsUI();
                 page.updateStatus('Error: Failed to load validation data', true);
             },
         });

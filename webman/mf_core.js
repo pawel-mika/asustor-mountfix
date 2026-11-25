@@ -11,6 +11,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
         this._pollTimer = null;
         this._pollActive = false;
         this._statusFadeTimer = null;
+        this._validatingCount = 0;
         this.callParent();
         this.init();
     },

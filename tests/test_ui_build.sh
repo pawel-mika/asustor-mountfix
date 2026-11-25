@@ -20,7 +20,7 @@ grep -q "Unmount & Sync-back" webman/mountfix.js || { echo "FAIL: Unmount & Sync
 grep -q "AS.ARC.msgWindow" webman/mountfix.js || { echo "FAIL: AS.ARC.msgWindow missing from mountfix.js"; exit 1; }
 
 # Check that unmount is blocked when app is running
-grep -q "btnUnmount.setDisabled(running || !mounted)" webman/mountfix.js || { echo "FAIL: unmount button must be disabled when running"; exit 1; }
+grep -q "btnUnmount.setDisabled(validating || running || !mounted)" webman/mountfix.js || { echo "FAIL: unmount button must be disabled when validating or running"; exit 1; }
 
 # Ensure no dead code, debug leftovers, or path typos remain (F9, F17)
 for forbidden in "console.log('sync back')" "rsync -au" "window.qq" "getApps(" "..apps/MountFix"; do
@@ -461,6 +461,42 @@ assert.strictEqual(createdDialogs[0].shown, true);
 assert.strictEqual(createdDialogs[0].cfg.title, 'MountFix Quick Guide');
 assert.strictEqual(createdDialogs[0].cfg.items[0].autoScroll, true, 'Help dialog panel must be scrollable');
 assert(createdDialogs[0].cfg.items[0].html.includes('https://github.com/pawel-mika/asustor-mountfix#readme'), 'Help dialog must include GitHub docs link');
+
+// 22. Actions are disabled while validate() is in flight and re-enabled on completion (success or failure)
+const btnStates = {};
+const makeTrackedBtn = (id) => ({
+    setText() {},
+    setDisabled(v) { btnStates[id] = !!v; },
+    disable() { btnStates[id] = true; },
+});
+let deferredAjax = null;
+sandbox.AS.ARC.ajax = (opts) => { deferredAjax = opts; };
+p = makePage();
+p.validate = actionsProto.validate;
+p.updateActionsUI = actionsProto.updateActionsUI;
+p._validatingCount = 0;
+p.selectedApp = { get: (k) => (k === 'name' ? 'docker-ce' : k === 'existsInTarget') };
+p.win.down = (sel) => {
+    if (sel === 'combo[name=targetVolume]') return { getValue: () => '/volume2' };
+    if (sel === '#btnCopyToTarget') return makeTrackedBtn('copy');
+    if (sel === '#btnMount') return makeTrackedBtn('mount');
+    if (sel === '#btnUnmount') return makeTrackedBtn('unmount');
+    if (sel === '#btnSyncBack') return makeTrackedBtn('sync');
+    if (sel === '#actionHint') return { update() {} };
+    if (sel === '#appGrid') return { getStore: () => ({ findRecord: () => null, add() {} }) };
+    return null;
+};
+p.validate();
+assert.strictEqual(p._validatingCount, 1, '_validatingCount must increment while validate is in flight');
+assert.strictEqual(btnStates.copy, true, 'Copy must be disabled while validating');
+assert.strictEqual(btnStates.mount, true, 'Mount must be disabled while validating');
+assert.strictEqual(btnStates.unmount, true, 'Unmount must be disabled while validating');
+assert.strictEqual(btnStates.sync, true, 'Sync back must be disabled while validating');
+deferredAjax.failure({ success: false });
+assert.strictEqual(p._validatingCount, 0, '_validatingCount must decrement on validate failure');
+assert.strictEqual(btnStates.copy, false, 'Copy must re-enable after validate finishes for stopped unmounted app');
+assert.strictEqual(btnStates.mount, false, 'Mount must re-enable after validate finishes when existsInTarget=true');
+sandbox.AS.ARC.ajax = origAjax;
 EOF
 fi
 

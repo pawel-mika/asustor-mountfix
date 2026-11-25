@@ -206,6 +206,7 @@ ADM enforces a 60-second per-script shutdown timeout (`/etc/script/script_trap.s
 - **Window Lifecycle Listeners & Scrollbars:** Attach `afterrender`/`beforeclose` via `this.win.on(...)` *after* `desktop.createWindow()` returns — passing `listeners` in the config object overwrites `AS.ARC.appWindow.prototype.listeners` (PerfectScrollbar management on `.x-panel-body`, resize updates, and click-to-focus). Do not call `Ps.initialize(win.body.dom)` manually.
 - **AJAX Failure Delivery:** Always pass `enableFailureReturn: true` to `AS.ARC.ajax(...)` so HTTP 5xx, network errors, and timeouts invoke the `failure` handler and unmask `maskStack`.
 - **Dialogs:** Use `AS.ARC.msgWindow` for short confirmations/warnings and `AS.ARC.subWindow` (with an `autoScroll: true` panel) for longer content like *MountFix Quick Guide*.
+- **Non-Blocking Validation Guard:** `validate()` tracks in-flight requests via `_validatingCount` and disables the four **Options** action buttons (`Copy to target`, `Mount`, `Unmount`, `Sync back`) while validation is running, keeping the window scrollable/responsive without allowing actions on stale state.
 
 ---
 

@@ -418,6 +418,6 @@ ensure_app_not_busy "/volume2" "busyapp" >/dev/null || fail "ensure_app_not_busy
 
 # Test 11: JS UI mask safety checks
 grep -q 'unmaskAll' "$REPO_ROOT/webman/mf_actions.js" || fail "unmaskAll missing from mf_actions.js"
-grep -q 'btnUnmount.setDisabled(running || !mounted)' "$REPO_ROOT/webman/mf_actions.js" || fail "Unmount button must be disabled when app is running"
+grep -q 'btnUnmount.setDisabled(validating || running || !mounted)' "$REPO_ROOT/webman/mf_actions.js" || fail "Unmount button must be disabled when validating or running"
 
 echo "PASS: Sync-back and transfer guard tests passed."
