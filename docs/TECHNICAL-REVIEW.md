@@ -546,10 +546,10 @@ Implemented as 3 atomic commits plus one fix wave, each task reviewed (spec + qu
 
 | Commit | Findings | Summary |
 |---|---|---|
-| `bcb8229` | `F6`, `F14`, `F17` (shell) | `CONTROL/lib.sh` (path builders, validators, `is_mounted`, `pids_using_paths`, `json_escape`, `mounts.list` helpers), `MountFix` blocked from relocation, POSIX `url_decode`, no `readonly`, dead code removed. |
-| `18693f4` | `F5`, `F7` | `send_json` / `send_json_error`, fail-closed `require_adm_session`, strict `save_mountfix_config` validation + normalization, unknown `act` handled, CGIs `0755`, `"unknown"` fallback version. |
-| `c2470bd` | `F13` | `resolve_base_block_device` (`nvme0n1p1` → `nvme0n1`), exact `/proc/mounts` lookup, `df -Ph` with wrapped-line handling. |
-| `157d0d3` | fix wave | `act=get-nonstop` for `admin.cgi`, UI `failure(json)` handling, empty-output guard in `mount.cgi`. |
+| `57ad9fc` | `F6`, `F14`, `F17` (shell) | `CONTROL/lib.sh` (path builders, validators, `is_mounted`, `pids_using_paths`, `json_escape`, `mounts.list` helpers), `MountFix` blocked from relocation, POSIX `url_decode`, no `readonly`, dead code removed. |
+| `e953d28` | `F5`, `F7` | `send_json` / `send_json_error`, fail-closed `require_adm_session`, strict `save_mountfix_config` validation + normalization, unknown `act` handled, CGIs `0755`, `"unknown"` fallback version. |
+| `7dbf4a4` | `F13` | `resolve_base_block_device` (`nvme0n1p1` → `nvme0n1`), exact `/proc/mounts` lookup, `df -Ph` with wrapped-line handling. |
+| `491329a` | fix wave | `act=get-nonstop` for `admin.cgi`, UI `failure(json)` handling, empty-output guard in `mount.cgi`. |
 
 ### 8.1 Field facts learned (ADM 5.1.5)
 
@@ -575,9 +575,9 @@ Implemented as 2 atomic commits plus a version bump, verified locally with expan
 
 | Commit | Findings | Summary |
 |---|---|---|
-| `3623346` | `F12`, `F8` | Detached background subshell (`</dev/null >/dev/null 2>&1 &` + `trap '' HUP`) so `migrate.cgi` returns immediately; unbuffered `_stream_rsync_progress` (`stdbuf -oL tr` + `awk` fallback); atomic `/tmp/mountfix.lock` mutex with `pid`/`owner` and stale-lock recovery; `mktemp` for mount/umount error files and per-transfer FIFO dir; atomic status writes (`_write_status_atomic`) with explicit `DONE` / `ERROR` markers and `state` / `pid` fields in `get_transfer_status_json()`; UI finishes only on `state === 'done'` (never prematurely at `100%`). |
-| `c03e171` | `F4` | `detect_rsync_flags()` uses `-aH --numeric-ids` and probes both `rsync --version` and a live `--dry-run` on source/destination before enabling `-A`, `-X`, and `--outbuf=L`; dropped unsafe `-u`; unified trailing-slash app paths (`"$src/" "$dst/"`) before enabling `--delete` mirror mode on sync-back and `force=1` copy; added `ensure_app_not_busy()` (`pids_using_paths`) guard across `start_app_transfer`, `start_app_sync_back`, `mount_app`, and `unmount_app`; updated UI confirmation dialogs (`mf_actions.js` / `mountfix.js`) to warn explicitly about mirror mode (`--delete`) on forced copy, standalone sync-back, and unmount & sync-back. |
-| `437ee7c` | release | Bumped package version to `0.0.0.107` (`CONTROL/config.json`, `webman/mf_core.js`, `webman/mountfix.js`). |
+| `bdb4e18` | `F12`, `F8` | Detached background subshell (`</dev/null >/dev/null 2>&1 &` + `trap '' HUP`) so `migrate.cgi` returns immediately; unbuffered `_stream_rsync_progress` (`stdbuf -oL tr` + `awk` fallback); atomic `/tmp/mountfix.lock` mutex with `pid`/`owner` and stale-lock recovery; `mktemp` for mount/umount error files and per-transfer FIFO dir; atomic status writes (`_write_status_atomic`) with explicit `DONE` / `ERROR` markers and `state` / `pid` fields in `get_transfer_status_json()`; UI finishes only on `state === 'done'` (never prematurely at `100%`). |
+| `a5b5ddb` | `F4` | `detect_rsync_flags()` uses `-aH --numeric-ids` and probes both `rsync --version` and a live `--dry-run` on source/destination before enabling `-A`, `-X`, and `--outbuf=L`; dropped unsafe `-u`; unified trailing-slash app paths (`"$src/" "$dst/"`) before enabling `--delete` mirror mode on sync-back and `force=1` copy; added `ensure_app_not_busy()` (`pids_using_paths`) guard across `start_app_transfer`, `start_app_sync_back`, `mount_app`, and `unmount_app`; updated UI confirmation dialogs (`mf_actions.js` / `mountfix.js`) to warn explicitly about mirror mode (`--delete`) on forced copy, standalone sync-back, and unmount & sync-back. |
+| `0b31c30` | release | Bumped package version to `0.0.0.107` (`CONTROL/config.json`, `webman/mf_core.js`, `webman/mountfix.js`). |
 
 ### 9.1 Key design points
 

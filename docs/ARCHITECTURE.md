@@ -27,7 +27,7 @@ sequenceDiagram
     participant Status as File (/tmp/mountfix_transfer.status)
 
     User->>FE: Click "Copy to Target" / "Sync Back"
-    FE->>CGI: GET migrate.cgi?act=migrate|sync_back&app=...&target=...
+    FE->>CGI: POST (migrate) / GET (sync_back) migrate.cgi?act=migrate|sync_back&app=...&target=...
     CGI->>Script: start_app_transfer() or start_app_sync_back()
     
     Script->>Script: Run safety checks (is_app_bind_mounted, ensure_app_not_busy, target_exists)
