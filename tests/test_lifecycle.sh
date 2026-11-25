@@ -79,12 +79,17 @@ cat > "$FAKE_MOUNTS" <<'EOF'
 EOF
 
 OUT_ERR="$TMP_DIR/uninstall.err"
-if MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" PROC_MOUNTS="$FAKE_MOUNTS" ADM_SYSLOG_BIN=/nonexistent \
+if MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" PROC_MOUNTS="$FAKE_MOUNTS" ADM_SYSLOG_BIN=/nonexistent APKG_PKG_STATUS=uninstall \
     /bin/sh "$REPO_ROOT/CONTROL/pre-uninstall.sh" 2>"$OUT_ERR"; then
-    fail "pre-uninstall.sh must fail when AppCentral bind mounts are active"
+    fail "pre-uninstall.sh must fail on uninstall when AppCentral bind mounts are active"
 fi
 grep -q "docker-ce" "$OUT_ERR" || fail "pre-uninstall.sh error must list docker-ce"
 grep -q "entware" "$OUT_ERR" || fail "pre-uninstall.sh error must list entware"
+
+# 6b. pre-uninstall.sh MUST allow upgrades (APKG_PKG_STATUS=upgrade) even while bind mounts are active
+echo "Test 5b: pre-uninstall.sh allows upgrade while bind mounts are active..."
+MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" PROC_MOUNTS="$FAKE_MOUNTS" ADM_SYSLOG_BIN=/nonexistent APKG_PKG_STATUS=upgrade \
+    /bin/sh "$REPO_ROOT/CONTROL/pre-uninstall.sh" || fail "pre-uninstall.sh must NOT block package upgrades"
 
 # 7. pre-uninstall.sh succeeds when no AppCentral bind mounts are active
 echo "Test 6: pre-uninstall.sh allows uninstall when no bind mounts are active..."

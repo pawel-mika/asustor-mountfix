@@ -1,5 +1,10 @@
 #!/bin/sh
 
+# Allow package upgrades while bind mounts are active; only block real uninstalls.
+if [ "${APKG_PKG_STATUS:-}" = "upgrade" ]; then
+	exit 0
+fi
+
 if [ -n "${MOUNTFIX_LIB_SH:-}" ] && [ -f "$MOUNTFIX_LIB_SH" ]; then
 	. "$MOUNTFIX_LIB_SH"
 elif [ -f "$(dirname "$0")/lib.sh" ]; then
