@@ -200,6 +200,13 @@ ADM enforces a 60-second per-script shutdown timeout (`/etc/script/script_trap.s
 - ADM's `AS.ARC.ajax` calls `failure(json)` whenever the top-level `success` is `false`; the UI reads `json.result.target_exists` / `json.result.error` there.
 - Volume detection (`get_volume_rotational`) resolves SATA (`sdd4` → `sdd`) and NVMe/MMC (`nvme0n1p1` → `nvme0n1`) partitions, and `get_volumes_json` uses `df -Ph`.
 
+### 4.6 ADM ExtJS UI Integration Notes (Verified on ADM 5.1.5)
+
+- **Titlebar Help Icon:** Pass `exTitleButtons: [{ cls: 'x-tool-question', tooltip, handler }]` to `desktop.createWindow()` (do **not** pass `tools`, which bypasses `AS.ARC.appWindow.createExtraHeaderButtonsConfig`, and do not attach custom `listeners` to the button item).
+- **Window Lifecycle Listeners & Scrollbars:** Attach `afterrender`/`beforeclose` via `this.win.on(...)` *after* `desktop.createWindow()` returns — passing `listeners` in the config object overwrites `AS.ARC.appWindow.prototype.listeners` (PerfectScrollbar management on `.x-panel-body`, resize updates, and click-to-focus). Do not call `Ps.initialize(win.body.dom)` manually.
+- **AJAX Failure Delivery:** Always pass `enableFailureReturn: true` to `AS.ARC.ajax(...)` so HTTP 5xx, network errors, and timeouts invoke the `failure` handler and unmask `maskStack`.
+- **Dialogs:** Use `AS.ARC.msgWindow` for short confirmations/warnings and `AS.ARC.subWindow` (with an `autoScroll: true` panel) for longer content like *MountFix Quick Guide*.
+
 ---
 
 ## 5. Additional Architecture Topics

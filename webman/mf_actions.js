@@ -101,6 +101,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.configApiUrl, { act: 'get' }),
             method: 'GET',
+            enableFailureReturn: true,
             success: function (json) {
                 page.setMfConfig(json); // Update UI with loaded config
                 page.updateActionsUI();
@@ -122,6 +123,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.configApiUrl, { act: 'set' }),
             method: 'POST',
+            enableFailureReturn: true,
             params: Ext.encode(page.getMfConfig()),
             success: function (json) {
                 page.updateStatus('Settings applied successfully', false);
@@ -151,6 +153,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.validateApiUrl, params),
             method: 'GET',
+            enableFailureReturn: true,
             success: function (json) {
                 if (json.success && json.apps) {
                     var grid = page.win.down('#appGrid');
@@ -385,6 +388,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, params),
             method: 'POST',
+            enableFailureReturn: true,
             success: function (json) {
                 var res = (json && json.result) || {};
                 if (res.target_exists && !force) {
@@ -431,6 +435,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             AS.ARC.ajax({
                 url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'sync_back', target: target, app: app }),
                 method: 'POST',
+                enableFailureReturn: true,
                 success: function (json) {
                     var res = (json && json.result) || {};
                     if (json && json.success && (res.success || res.success === undefined)) {
@@ -628,6 +633,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.mountApiUrl, { act: act, target: target, app: app }),
             method: 'POST',
+            enableFailureReturn: true,
             success: function (json) {
                 page.unmaskWindow(actionMsg);
                 if (json && json.success) {
@@ -680,6 +686,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             AS.ARC.ajax({
                 url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'status' }),
                 method: 'GET',
+                enableFailureReturn: true,
                 success: function (json) {
                     if (!page._pollActive) {
                         return;
@@ -701,7 +708,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
                     if (json && json.success) {
                         var statusMsg = (actionLabel || (appName ? ('Transfer ' + appName) : 'Transfer')) + ': ' + progress + '%';
-                        if (page.win && page.win.el) {
+                        if (page.win && !page.win.isDestroyed && page.win.el) {
                             page.win.el.mask(statusMsg);
                         }
 
@@ -755,12 +762,39 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             'Open full documentation on GitHub &rarr;</a>' +
             '</div>';
 
-        if (Ext.ClassManager && Ext.ClassManager.isCreated('AS.ARC.msgWindow')) {
-            var dlg = Ext.create('AS.ARC.msgWindow', {
+        if (Ext.ClassManager && Ext.ClassManager.isCreated('AS.ARC.subWindow')) {
+            var subDlg = Ext.create('AS.ARC.subWindow', {
                 parentWin: page.win,
                 title: 'MountFix Quick Guide',
                 width: 640,
                 height: 360,
+                layout: 'fit',
+                modal: true,
+                items: [
+                    {
+                        xtype: 'panel',
+                        border: false,
+                        autoScroll: true,
+                        bodyPadding: '12 16',
+                        html: bodyHtml,
+                    },
+                ],
+                fbar: [
+                    {
+                        text: 'Close',
+                        handler: function () {
+                            subDlg.close();
+                        },
+                    },
+                ],
+            });
+            subDlg.show();
+        } else if (Ext.ClassManager && Ext.ClassManager.isCreated('AS.ARC.msgWindow')) {
+            var dlg = Ext.create('AS.ARC.msgWindow', {
+                parentWin: page.win,
+                title: 'MountFix Quick Guide',
+                width: 640,
+                height: 380,
                 iconType: 'info',
                 asItems: [{ xtype: 'displayfield', value: bodyHtml }],
                 fbar: [
@@ -780,7 +814,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
     unmaskAll: function () {
         this.maskStack = [];
-        if (this.win && this.win.el) {
+        if (this.win && !this.win.isDestroyed && this.win.el) {
             this.win.el.unmask();
         }
     },
@@ -791,7 +825,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         }
         message = message || 'Working...';
         this.maskStack.push(message);
-        if (this.win && this.win.el) {
+        if (this.win && !this.win.isDestroyed && this.win.el) {
             this.win.el.mask(this.maskStack[this.maskStack.length - 1]);
         }
     },
@@ -807,11 +841,11 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         }
 
         if (this.maskStack.length > 0) {
-            if (this.win && this.win.el) {
+            if (this.win && !this.win.isDestroyed && this.win.el) {
                 this.win.el.mask(this.maskStack[this.maskStack.length - 1]);
             }
         } else {
-            if (this.win && this.win.el) {
+            if (this.win && !this.win.isDestroyed && this.win.el) {
                 this.win.el.unmask();
             }
         }

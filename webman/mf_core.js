@@ -322,6 +322,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
             title: 'MountFix',
             width: winWidth,
             height: winHeight,
+            minWidth: 760,
             layout: 'fit',
             taskIcon: '../apps/MountFix/images/icon-app-task.png',
             // ADM AS.ARC.appWindow reads exTitleButtons (not tools) and applies cls to the inner <img>
@@ -335,22 +336,18 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                 },
             ],
             items: [mainPanel],
-            listeners: {
-                afterrender: function (win) {
-                    // Initialization of ADM scrollbar (PerfectScrollbar)
-                    if (window.Ps) {
-                        Ps.initialize(win.body.dom);
-                    }
-                    fn.loadConfig(); // Load initial config
-                },
-                beforeclose: function () {
-                    fn.stopMigrationMonitor();
-                    if (fn._statusFadeTimer) {
-                        clearTimeout(fn._statusFadeTimer);
-                        fn._statusFadeTimer = null;
-                    }
-                },
-            },
+        });
+
+        // Attach via win.on() so AS.ARC.appWindow.prototype.listeners (Ps scrollbars, resize, focus) is preserved
+        this.win.on('afterrender', function () {
+            fn.loadConfig();
+        });
+        this.win.on('beforeclose', function () {
+            fn.stopMigrationMonitor();
+            if (fn._statusFadeTimer) {
+                clearTimeout(fn._statusFadeTimer);
+                fn._statusFadeTimer = null;
+            }
         });
     },
 });

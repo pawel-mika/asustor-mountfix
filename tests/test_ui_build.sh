@@ -32,9 +32,17 @@ grep -q "taskIcon: '../apps/MountFix/images/icon-app-task.png'" webman/mountfix.
 grep -q "stopMigrationMonitor" webman/mountfix.js || { echo "FAIL: stopMigrationMonitor missing"; exit 1; }
 grep -q "exTitleButtons:" webman/mountfix.js || { echo "FAIL: ADM exTitleButtons config missing"; exit 1; }
 grep -q "cls: 'x-tool-question'" webman/mountfix.js || { echo "FAIL: ADM x-tool-question help icon class missing"; exit 1; }
+grep -q "this.win.on('afterrender'" webman/mountfix.js || { echo "FAIL: win.on('afterrender') missing (must not shadow AS.ARC.appWindow listeners)"; exit 1; }
+grep -q "this.win.on('beforeclose'" webman/mountfix.js || { echo "FAIL: win.on('beforeclose') missing"; exit 1; }
+if grep -qF "Ps.initialize" webman/mountfix.js; then
+    echo "FAIL: manual Ps.initialize(win.body.dom) must be removed (ADM handles Ps globally)"; exit 1
+fi
 if grep -qF "btnHelp" webman/mountfix.js; then
     echo "FAIL: footer btnHelp button must not be present (use exTitleButtons x-tool-question)"; exit 1
 fi
+AJAX_CALLS=$(grep -c "AS\.ARC\.ajax({" webman/mf_actions.js)
+FAILURE_RET=$(grep -c "enableFailureReturn: true" webman/mf_actions.js)
+[ "$AJAX_CALLS" -eq "$FAILURE_RET" ] || { echo "FAIL: every AS.ARC.ajax call must set enableFailureReturn: true ($FAILURE_RET/$AJAX_CALLS)"; exit 1; }
 
 # Check that Target Directory Exists prompt helper is present and used on failure/success
 grep -q "promptTargetExists" webman/mountfix.js || { echo "FAIL: promptTargetExists missing from mountfix.js"; exit 1; }
@@ -442,14 +450,17 @@ assert.strictEqual(p.getMfConfig().enableSysctlTuning, true, 'getMfConfig must r
 sysctlVal = false;
 assert.strictEqual(p.getMfConfig().enableSysctlTuning, false, 'getMfConfig must return boolean enableSysctlTuning=false');
 
-// 21. showHelpDialog opens Quick Guide modal with GitHub documentation link
+// 21. showHelpDialog opens scrollable AS.ARC.subWindow (when available) or msgWindow fallback with GitHub link
 createdDialogs = [];
+sandbox.Ext.ClassManager.isCreated = (cls) => cls === 'AS.ARC.subWindow' || cls === 'AS.ARC.msgWindow';
 p = makePage();
 p.showHelpDialog();
-assert.strictEqual(createdDialogs.length, 1, 'showHelpDialog must open AS.ARC.msgWindow');
+assert.strictEqual(createdDialogs.length, 1, 'showHelpDialog must open AS.ARC.subWindow');
+assert.strictEqual(createdDialogs[0].cls, 'AS.ARC.subWindow');
 assert.strictEqual(createdDialogs[0].shown, true);
 assert.strictEqual(createdDialogs[0].cfg.title, 'MountFix Quick Guide');
-assert(createdDialogs[0].cfg.asItems[0].value.includes('https://github.com/pawel-mika/asustor-mountfix#readme'), 'Help dialog must include GitHub docs link');
+assert.strictEqual(createdDialogs[0].cfg.items[0].autoScroll, true, 'Help dialog panel must be scrollable');
+assert(createdDialogs[0].cfg.items[0].html.includes('https://github.com/pawel-mika/asustor-mountfix#readme'), 'Help dialog must include GitHub docs link');
 EOF
 fi
 
