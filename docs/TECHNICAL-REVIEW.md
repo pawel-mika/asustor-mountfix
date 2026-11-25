@@ -351,6 +351,9 @@ To avoid merge conflicts in `webman/scripts/common.sh` and `webman/mf_actions.js
    - **Commit 1 (`F15` + `F10` lifecycle):** Add Entware `PATH` and independent `jq`/`bash`/`rsync` checks in `CONTROL/pre-install.sh`, block package uninstall when bind mounts are active in `CONTROL/pre-uninstall.sh`, and clear pre-selected `docker-ce` from the shipped default `etc/mountfix.conf`.
    - **Commit 2 (`F10` build + `F11` remainder + repo cleanup):** Stop `build.sh` from dirtying tracked JS/version files on every local build, make `sysctl` writeback tuning an explicit config/UI option, remove the temporary `CONTROL/common.sh` compatibility shim, and clean up untracked `tools/` plus merged legacy branches.
 
+5. **Post-Stage 2 Feature Backlog (separate ticket, tracked in `IDEAS.md` §2):**
+   - **Safe "Delete Target" workflow:** UI button + `POST` backend endpoint to remove `<target>/AppCentral/<app>` only when stopped and unmounted, preceded by a read-only `src ↔ target` diff summary, a *"Sync back first"* option, and an explicit irreversible confirmation.
+
 ---
 
 ## 5. What is already good (keep it)

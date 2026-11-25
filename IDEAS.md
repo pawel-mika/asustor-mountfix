@@ -57,3 +57,22 @@ Inspecting `webman/validate.cgi` and `webman/scripts/common.sh` reveals the foll
   1. Replace `page.maskWindow('Validating configuration...')` with a subtle progress indicator (status bar text or grid header spinner).
   2. Apply **optimistic UI updates**: When `mount.cgi` responds with `{ success: true }`, update the ExtJS grid record in-memory immediately (`record.set('mounted', ...)`), without waiting for disk validation to complete.
 - **Expected Impact:** Smooth, modern UX with zero UI freezing.
+
+---
+
+## 2. Safe "Delete Target" Workflow (Future Feature)
+
+### 2.1 Goal
+Allow users to reclaim space on the target SSD volume by deleting `<target>/AppCentral/<app>` after reverting an application to `/volume1`, without risking accidental data loss.
+
+### 2.2 Required Safety Guardrails
+1. **Strict Pre-Conditions (UI + Server-Side):**
+   - App must be **stopped** (verified server-side via `pids_using_paths`).
+   - App must **not be bind-mounted** (`!is_app_bind_mounted`) and not listed in `etc/mounts.list`.
+   - Target path must match `<targetVolume>/AppCentral/<validatedAppName>` (never parent dirs, never `MountFix`).
+2. **Pre-Delete Diff Inspection:**
+   - Before confirming deletion, run a read-only comparison (`rsync --dry-run --itemize-changes` / summary of newer or extra files on SSD vs. `/volume1` HDD) and show the result in the confirmation modal.
+3. **Recovery-First Prompt:**
+   - If differences exist, offer **"Sync back first, then delete"** alongside **"Delete target only"** and **"Cancel"**.
+4. **Explicit Irreversible Confirmation:**
+   - Clearly warn that deletion cannot be undone and require explicit confirmation (e.g. typing the application name) before invoking the `POST` delete endpoint.

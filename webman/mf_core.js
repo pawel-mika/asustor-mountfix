@@ -10,6 +10,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
         this.maskStack = [];
         this._pollTimer = null;
         this._pollActive = false;
+        this._statusFadeTimer = null;
         this.callParent();
         this.init();
     },
@@ -230,6 +231,14 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                             ],
                         },
                         {
+                            xtype: 'component',
+                            itemId: 'actionHint',
+                            hidden: true,
+                            margin: '6 0 4 0',
+                            style: 'color: #b45309; font-size: 11px;',
+                            html: '',
+                        },
+                        {
                             xtype: 'displayfield',
                             itemId: 'displayVersion',
                             fieldLabel: 'Version',
@@ -289,6 +298,10 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                 },
                 beforeclose: function () {
                     fn.stopMigrationMonitor();
+                    if (fn._statusFadeTimer) {
+                        clearTimeout(fn._statusFadeTimer);
+                        fn._statusFadeTimer = null;
+                    }
                 },
             },
         });

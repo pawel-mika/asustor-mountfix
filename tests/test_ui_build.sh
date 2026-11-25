@@ -353,6 +353,67 @@ assert.strictEqual(createdDialogs[0].cfg.title, 'Warning: Relocating Entware');
 nextAjaxResponse = { success: true, message: 'Mounted' };
 createdDialogs[0].cfg.fbar[0].handler();
 assert.strictEqual(lastAjaxOpts.method, 'POST', 'confirming entware mount warning must execute POST mount');
+
+// 18. migrateSelectedApp(false) with existsInTarget=true prompts immediately (no pre-flight overlay/AJAX)
+createdDialogs = [];
+lastAjaxOpts = null;
+p = makePage();
+p.selectedApp = { get: (k) => (k === 'name' ? 'docker-ce' : k === 'existsInTarget') };
+p.migrateSelectedApp(false);
+assert.strictEqual(lastAjaxOpts, null, 'existsInTarget=true should prompt before sending migrate AJAX');
+assert.strictEqual(p.maskStack.length, 0, 'existsInTarget=true should not mask window before prompt');
+assert.strictEqual(createdDialogs.length, 1);
+assert.strictEqual(createdDialogs[0].cfg.title, 'Target Directory Exists');
+
+// 19. validate() persists status during flight, clears on finish, and calls record.commit()
+timeoutCallbacks = [];
+let committed = false;
+const statusLog = [];
+p = makePage();
+p.validate = actionsProto.validate;
+p.updateStatus = (msg, isErr, persist) => statusLog.push({ msg, isErr, persist: !!persist });
+p.win.down = (sel) => {
+    if (sel === 'combo[name=targetVolume]') return { getValue: () => '/volume2' };
+    if (sel === '#appGrid') {
+        return {
+            getStore: () => ({
+                findRecord: () => ({ set() {}, commit() { committed = true; } }),
+                add() {},
+            }),
+        };
+    }
+    return null;
+};
+nextAjaxResponse = { success: true, apps: [{ name: 'docker-ce', configured: true }] };
+p.validate();
+assert.strictEqual(statusLog[0].msg, 'Validating...');
+assert.strictEqual(statusLog[0].persist, true, 'Validating status must persist until response');
+assert.strictEqual(statusLog.at(-1).msg, '', 'Validating status must clear on completion');
+assert.strictEqual(committed, true, 'validate() must call record.commit() to clear dirty markers');
+
+// 20. updateActionsUI shows #actionHint when a running app is selected and hides when stopped
+let hintVisible = false;
+let hintHtml = '';
+const makeBtn = () => ({ setText() {}, setDisabled() {}, disable() {} });
+p = makePage();
+p.win.down = (sel) => {
+    if (sel === '#actionHint') {
+        return {
+            update(h) { hintHtml = h; },
+            show() { hintVisible = true; },
+            hide() { hintVisible = false; },
+        };
+    }
+    return makeBtn();
+};
+p.selectedApp = { get: (k) => (k === 'name' ? 'minidlna' : k === 'enabled') };
+p.updateActionsUI();
+assert.strictEqual(hintVisible, true, 'actionHint must be visible for running app');
+assert(hintHtml.includes('minidlna') && hintHtml.includes('AppCentral'));
+
+p.selectedApp = { get: (k) => (k === 'name' ? 'minidlna' : false) };
+p.updateActionsUI();
+assert.strictEqual(hintVisible, false, 'actionHint must hide for stopped app');
 EOF
 fi
 

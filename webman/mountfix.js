@@ -22,40 +22,75 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         var btnMount = this.win.down('#btnMount');
         var btnUnmount = this.win.down('#btnUnmount');
         var btnSyncBack = this.win.down('#btnSyncBack');
+        var actionHint = this.win.down('#actionHint');
         if (!btnCopyToTarget) return;
 
         if (this.selectedApp) {
             const mounted = !!this.selectedApp.get('mounted');
             const running = !!this.selectedApp.get('enabled');
             const existsInTarget = !!this.selectedApp.get('existsInTarget');
-            btnCopyToTarget.setText('Copy to target: ' + this.selectedApp.get('name'));
+            const appName = this.selectedApp.get('name');
+            btnCopyToTarget.setText('Copy to target: ' + appName);
             // All actions (Copy, Mount, Unmount, Sync) require the app to be stopped to prevent filesystem conflicts
             btnCopyToTarget.setDisabled(running || mounted);
             btnMount.setDisabled(running || !existsInTarget || mounted);
             btnUnmount.setDisabled(running || !mounted);
             btnSyncBack.setDisabled(running || !existsInTarget || mounted);
+            if (actionHint) {
+                if (running) {
+                    actionHint.update(
+                        'Stop <b>' +
+                            Ext.String.htmlEncode(appName) +
+                            '</b> in AppCentral first to copy, mount, unmount, or sync back.',
+                    );
+                    actionHint.show();
+                } else {
+                    actionHint.hide();
+                }
+            }
         } else {
             btnCopyToTarget.setText('Copy to target');
             btnCopyToTarget.disable();
             btnMount.disable();
             btnUnmount.disable();
             btnSyncBack.disable();
+            if (actionHint) {
+                actionHint.hide();
+            }
         }
     },
 
-    updateStatus: function (message, isError) {
+    updateStatus: function (message, isError, persist) {
         var statusCont = this.win.down('#statusInfo');
+        if (!statusCont) return;
+
+        if (this._statusFadeTimer) {
+            clearTimeout(this._statusFadeTimer);
+            this._statusFadeTimer = null;
+        }
+
+        if (!message) {
+            statusCont.update('');
+            return;
+        }
+
         var color = isError ? '#cc0000' : '#007dff';
         var icon = isError ? 'alert.png' : 'common-icon_16X16_status_tip_ok.png';
         statusCont.update('<img src="resources/images/icons/common_16x16/' + icon + '" style="vertical-align:middle; margin-right:5px;">' + message);
-        statusCont.el.setStyle('color', color);
-        statusCont.el.setOpacity(1);
+        if (statusCont.el) {
+            statusCont.el.setStyle('color', color);
+            statusCont.el.setOpacity(1);
+        }
 
-        Ext.defer(function () {
-            if (statusCont.el) {
-                statusCont.el.fadeOut({ duration: 1000 });
-            }
-        }, 4000);
+        if (!persist) {
+            var page = this;
+            this._statusFadeTimer = setTimeout(function () {
+                page._statusFadeTimer = null;
+                if (statusCont.el) {
+                    statusCont.el.fadeOut({ duration: 1000 });
+                }
+            }, 4000);
+        }
     },
 
     loadConfig: function () {
@@ -99,7 +134,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         });
     },
 
-    validate: function (appName) {
+    validate: function (appName, silent) {
         var page = this;
         var target = page.getSelectedVolume();
         var params = {
@@ -109,7 +144,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         if (appName) {
             params.app = appName;
         }
-        page.updateStatus('Validating' + (appName ? ' ' + appName : '') + '...', false);
+        if (!silent) {
+            page.updateStatus('Validating' + (appName ? ' ' + appName : '') + '...', false, true);
+        }
 
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.validateApiUrl, params),
@@ -127,6 +164,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                             var record = store.findRecord('name', app.name, 0, false, false, true);
                             if (record) {
                                 record.set(updateData);
+                                if (record.commit) {
+                                    record.commit();
+                                }
                             } else {
                                 store.add(updateData);
                             }
@@ -134,6 +174,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                     }
                 }
                 page.updateActionsUI();
+                if (!silent) {
+                    page.updateStatus('', false);
+                }
             },
             failure: function () {
                 page.updateStatus('Error: Failed to load validation data', true);
@@ -318,6 +361,12 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             page.confirmEntwareAction('copy to target', function () {
                 page.migrateSelectedApp(false, true);
             });
+            return;
+        }
+
+        var existsInTarget = !!(page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('existsInTarget') : page.selectedApp.data.existsInTarget));
+        if (!force && existsInTarget) {
+            page.promptTargetExists(app, target);
             return;
         }
 
@@ -581,7 +630,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                     if (typeof onSuccessCallback === 'function') {
                         onSuccessCallback();
                     } else {
-                        page.validate(app);
+                        page.validate(app, true);
                     }
                 } else {
                     page.updateStatus('Error: ' + ((json && json.error) || 'Operation failed'), true);
@@ -646,7 +695,6 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
                     if (json && json.success) {
                         var statusMsg = (actionLabel || (appName ? ('Transfer ' + appName) : 'Transfer')) + ': ' + progress + '%';
-                        page.updateStatus(statusMsg, false);
                         if (page.win && page.win.el) {
                             page.win.el.mask(statusMsg);
                         }
@@ -656,7 +704,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                             page.stopMigrationMonitor();
                             page.unmaskAll();
                             page.updateStatus((actionLabel || 'Operation') + ' completed successfully', false);
-                            page.validate(appName || app);
+                            page.validate(appName || app, true);
                             if (typeof callbackOnComplete === 'function') {
                                 callbackOnComplete();
                             }
@@ -736,6 +784,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
         this.maskStack = [];
         this._pollTimer = null;
         this._pollActive = false;
+        this._statusFadeTimer = null;
         this.callParent();
         this.init();
     },
@@ -956,6 +1005,14 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                             ],
                         },
                         {
+                            xtype: 'component',
+                            itemId: 'actionHint',
+                            hidden: true,
+                            margin: '6 0 4 0',
+                            style: 'color: #b45309; font-size: 11px;',
+                            html: '',
+                        },
+                        {
                             xtype: 'displayfield',
                             itemId: 'displayVersion',
                             fieldLabel: 'Version',
@@ -1015,6 +1072,10 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                 },
                 beforeclose: function () {
                     fn.stopMigrationMonitor();
+                    if (fn._statusFadeTimer) {
+                        clearTimeout(fn._statusFadeTimer);
+                        fn._statusFadeTimer = null;
+                    }
                 },
             },
         });
