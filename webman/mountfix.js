@@ -76,7 +76,12 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
         var color = isError ? '#cc0000' : '#007dff';
         var icon = isError ? 'alert.png' : 'common-icon_16X16_status_tip_ok.png';
-        statusCont.update('<img src="resources/images/icons/common_16x16/' + icon + '" style="vertical-align:middle; margin-right:5px;">' + message);
+        statusCont.update(
+            '<span style="display:inline-flex; align-items:center; gap:5px; vertical-align:top;">' +
+                '<img src="resources/images/icons/common_16x16/' + icon + '" style="width:16px; height:16px; flex-shrink:0;">' +
+                '<span>' + message + '</span>' +
+            '</span>',
+        );
         if (statusCont.el) {
             statusCont.el.setStyle('color', color);
             statusCont.el.setOpacity(1);
@@ -1132,15 +1137,17 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                             xtype: 'component',
                             itemId: 'displayVersion',
                             html: '',
-                            style: 'color: #888; font-size: 11px;',
+                            height: 28,
+                            style: 'color: #888; font-size: 11px; line-height: 28px;',
                         },
-                        { xtype: 'tbfill' },
                         {
-                            xtype: 'container',
+                            xtype: 'component',
                             itemId: 'statusInfo',
+                            flex: 1,
+                            height: 28,
                             html: '',
-                            style: 'color: #333; font-size: 12px;',
-                            margin: '0 12 0 8',
+                            style: 'color: #333; font-size: 12px; line-height: 28px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;',
+                            margin: '0 14 0 12',
                         },
                         {
                             xtype: 'button',
