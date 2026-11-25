@@ -186,6 +186,7 @@ chmod 755 "$MOCK_AUTH"
 
 t_cgi_start=$(date +%s%3N)
 CGI_RAW=$(
+    REQUEST_METHOD=POST \
     QUERY_STRING="sid=valid_sid&act=migrate&target=/volume2&app=testapp&force=1" \
     ADM_AUTH_CGI="$MOCK_AUTH" \
     MOUNTFIX_WEBMAN_COMMON_SH="$REPO_ROOT/webman/scripts/common.sh" \

@@ -48,6 +48,7 @@ EOF
     send_response true "$RESPONSE_DATA"
 
 elif [ "$ACTION" = "set" ]; then
+    require_post_method
     POST_DATA=$(cat)
 
     if save_mountfix_config "$POST_DATA"; then

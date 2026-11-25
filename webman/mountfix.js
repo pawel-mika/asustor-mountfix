@@ -2,10 +2,7 @@
  * MountFix Actions
  */
 Ext.define('AS.ARC.apps.MountFix.Actions', {
-    maskStack: [],
-
     // Paths to API (adjust if folder name is different)
-    appsApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'apps.cgi',
     configApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'config.cgi',
     validateApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'validate.cgi',
     migrateApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'migrate.cgi',
@@ -61,39 +58,22 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         }, 4000);
     },
 
-    getApps: function () {
-        var page = this;
-
-        AS.ARC.ajax({
-            url: AS.ARC.util.getApiUrlWithSid(page.appsApiUrl, { act: 'get' }),
-            method: 'GET',
-            success: function (json) {
-                console.log('Apps:', json);
-            },
-            failure: function () {
-                console.error('Failed to load apps');
-            },
-        });
-    },
-
     loadConfig: function () {
         var page = this;
         var actionMsg = 'Loading configuration...';
-        window.qq = this;
         page.maskWindow(actionMsg);
 
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.configApiUrl, { act: 'get' }),
             method: 'GET',
             success: function (json) {
-                console.log('Config loaded:', json);
                 page.setMfConfig(json); // Update UI with loaded config
                 page.updateActionsUI();
                 page.validate();
                 page.unmaskWindow(actionMsg);
             },
             failure: function () {
-                console.error('Failed to load config');
+                page.updateStatus('Error: Failed to load configuration', true);
                 page.unmaskWindow(actionMsg);
             },
         });
@@ -106,6 +86,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.configApiUrl, { act: 'set' }),
+            method: 'POST',
             params: Ext.encode(page.getMfConfig()),
             success: function (json) {
                 page.updateStatus('Settings applied successfully', false);
@@ -269,7 +250,60 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         }
     },
 
-    migrateSelectedApp: function (force) {
+    confirmEntwareAction: function (actionLabel, onConfirm) {
+        var page = this;
+        var bodyHtml =
+            '<div style="font-size: 13px; font-weight: bold; margin-bottom: 8px;">' +
+            'Entware is a MountFix runtime dependency' +
+            '</div>' +
+            '<div style="font-size: 12px; line-height: 18px;">' +
+            '<b>entware</b> provides tools (<code>jq</code>, <code>rsync</code>, <code>bash</code>) used by MountFix and starts after <code>S02MountFix</code>.<br><br>' +
+            'Are you sure you want to ' +
+            Ext.String.htmlEncode(actionLabel) +
+            ' <b>entware</b>?' +
+            '</div>';
+
+        if (Ext.ClassManager && Ext.ClassManager.isCreated('AS.ARC.msgWindow')) {
+            var dlg = Ext.create('AS.ARC.msgWindow', {
+                parentWin: page.win,
+                title: 'Warning: Relocating Entware',
+                width: 500,
+                height: 210,
+                iconType: 'warning',
+                asItems: [{ xtype: 'displayfield', value: bodyHtml }],
+                fbar: [
+                    {
+                        text: 'Continue',
+                        handler: function () {
+                            dlg.close();
+                            onConfirm();
+                        },
+                    },
+                    {
+                        text: 'Cancel',
+                        handler: function () {
+                            dlg.close();
+                        },
+                    },
+                ],
+            });
+            dlg.show();
+        } else {
+            Ext.Msg.confirm(
+                'Warning: Relocating Entware',
+                'entware provides tools (jq, rsync, bash) used by MountFix. Are you sure you want to ' +
+                    Ext.String.htmlEncode(actionLabel) +
+                    ' entware?',
+                function (btn) {
+                    if (btn === 'yes') {
+                        onConfirm();
+                    }
+                },
+            );
+        }
+    },
+
+    migrateSelectedApp: function (force, skipEntwareWarn) {
         var page = this;
         var actionMsg = 'Copying application...';
         var target = page.getSelectedVolume();
@@ -277,6 +311,13 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
         if (!target || !app) {
             page.updateStatus('Error: Select volume and application first', true);
+            return;
+        }
+
+        if (app === 'entware' && !force && !skipEntwareWarn) {
+            page.confirmEntwareAction('copy to target', function () {
+                page.migrateSelectedApp(false, true);
+            });
             return;
         }
 
@@ -288,7 +329,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         page.maskWindow(actionMsg);
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, params),
-            params: Ext.encode(page.getMfConfig()),
+            method: 'POST',
             success: function (json) {
                 var res = (json && json.result) || {};
                 if (res.target_exists && !force) {
@@ -334,7 +375,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
             AS.ARC.ajax({
                 url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'sync_back', target: target, app: app }),
-                method: 'GET',
+                method: 'POST',
                 success: function (json) {
                     var res = (json && json.result) || {};
                     if (json && json.success && (res.success || res.success === undefined)) {
@@ -416,10 +457,17 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         }
     },
 
-    mountSelectedApp: function () {
-        var app = this.selectedApp && (this.selectedApp.get ? this.selectedApp.get('name') : this.selectedApp.data.name);
+    mountSelectedApp: function (skipEntwareWarn) {
+        var page = this;
+        var app = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
+        if (app === 'entware' && !skipEntwareWarn) {
+            page.confirmEntwareAction('mount', function () {
+                page.mountSelectedApp(true);
+            });
+            return;
+        }
         var label = app ? (' ' + app) : '';
-        this.bindMountAction('mount', 'Mounting' + label + '...', 'Mounted' + label + ' successfully');
+        page.bindMountAction('mount', 'Mounting' + label + '...', 'Mounted' + label + ' successfully');
     },
 
     unmountSelectedApp: function () {
@@ -524,7 +572,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         page.maskWindow(actionMsg);
         AS.ARC.ajax({
             url: AS.ARC.util.getApiUrlWithSid(page.mountApiUrl, { act: act, target: target, app: app }),
-            method: 'GET',
+            method: 'POST',
             success: function (json) {
                 page.unmaskWindow(actionMsg);
                 if (json && json.success) {
@@ -546,6 +594,14 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         });
     },
 
+    stopMigrationMonitor: function () {
+        this._pollActive = false;
+        if (this._pollTimer) {
+            clearTimeout(this._pollTimer);
+            this._pollTimer = null;
+        }
+    },
+
     monitorMigrationStatus: function (actionLabel, callbackOnComplete) {
         var page = this;
         if (typeof actionLabel === 'function') {
@@ -553,16 +609,26 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             actionLabel = null;
         }
 
+        page.stopMigrationMonitor();
+
         var app = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
         var baseLabel = actionLabel || (app ? ('Operation ' + app) : 'Transfer');
         var initialMask = baseLabel + '...';
         page.maskWindow(initialMask);
+        page._pollActive = true;
 
-        var intervalId = setInterval(function () {
+        var poll = function () {
+            if (!page._pollActive) {
+                return;
+            }
+            page._pollTimer = null;
             AS.ARC.ajax({
                 url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'status' }),
                 method: 'GET',
                 success: function (json) {
+                    if (!page._pollActive) {
+                        return;
+                    }
                     var result = (json && json.result) || {};
                     var appName = result.app;
                     var state = result.state;
@@ -572,7 +638,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
                     // Check for explicit failure state or ERROR marker in status file
                     if (state === 'error' || lastLine.indexOf('ERROR') !== -1) {
-                        clearInterval(intervalId);
+                        page.stopMigrationMonitor();
                         page.unmaskAll();
                         page.updateStatus('Error: ' + (lastLine || 'Transfer failed'), true);
                         return;
@@ -587,27 +653,34 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
                         var finished = state === 'done' && (!currentAppName || appName === currentAppName);
                         if (finished) {
-                            clearInterval(intervalId);
+                            page.stopMigrationMonitor();
                             page.unmaskAll();
                             page.updateStatus((actionLabel || 'Operation') + ' completed successfully', false);
                             page.validate(appName || app);
                             if (typeof callbackOnComplete === 'function') {
                                 callbackOnComplete();
                             }
+                            return;
                         }
+                        page._pollTimer = setTimeout(poll, 500);
                     } else {
-                        clearInterval(intervalId);
+                        page.stopMigrationMonitor();
                         page.unmaskAll();
                         page.updateStatus('Error: ' + ((json && (json.message || json.error)) || 'Transfer failed'), true);
                     }
                 },
                 failure: function () {
-                    clearInterval(intervalId);
+                    if (!page._pollActive) {
+                        return;
+                    }
+                    page.stopMigrationMonitor();
                     page.unmaskAll();
                     page.updateStatus('Error: Unable to check transfer status', true);
                 },
             });
-        }, 500);
+        };
+
+        page._pollTimer = setTimeout(poll, 500);
     },
 
     unmaskAll: function () {
@@ -618,6 +691,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
     },
 
     maskWindow: function (message) {
+        if (!this.maskStack) {
+            this.maskStack = [];
+        }
         message = message || 'Working...';
         this.maskStack.push(message);
         if (this.win && this.win.el) {
@@ -626,6 +702,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
     },
 
     unmaskWindow: function (message) {
+        if (!this.maskStack) {
+            this.maskStack = [];
+        }
         if (message) {
             Ext.Array.remove(this.maskStack, message);
         } else {
@@ -642,23 +721,6 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             }
         }
     },
-
-    // Helper function to wrap AS.ARC.ajax into a Promise - unused now, maybe remove later if not needed?
-    requestConfig: function (params) {
-        var me = this;
-        return new Promise(function (resolve, reject) {
-            AS.ARC.ajax({
-                url: AS.ARC.util.getApiUrlWithSid(me.apiUrl, params),
-                method: 'GET',
-                success: function (json) {
-                    resolve(json);
-                },
-                failure: function (json) {
-                    reject(json);
-                },
-            });
-        });
-    },
 });
 
 
@@ -671,6 +733,9 @@ Ext.define('AS.ARC.apps.MountFix.core', {
 
     constructor: function (config) {
         Ext.apply(this, config);
+        this.maskStack = [];
+        this._pollTimer = null;
+        this._pollActive = false;
         this.callParent();
         this.init();
     },
@@ -862,7 +927,6 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     itemId: 'btnCopyToTarget',
                                     handler: function () {
                                         fn.migrateSelectedApp();
-                                        console.log('copy to target');
                                     },
                                 },
                                 {
@@ -939,7 +1003,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
             width: 640,
             height: 640,
             layout: 'fit',
-            taskIcon: '..apps/MountFix/images/icon-app-task.png',
+            taskIcon: '../apps/MountFix/images/icon-app-task.png',
             items: [mainPanel],
             listeners: {
                 afterrender: function (win) {
@@ -948,7 +1012,9 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                         Ps.initialize(win.body.dom);
                     }
                     fn.loadConfig(); // Load initial config
-                    fn.getApps(); // Load list of apps
+                },
+                beforeclose: function () {
+                    fn.stopMigrationMonitor();
                 },
             },
         });

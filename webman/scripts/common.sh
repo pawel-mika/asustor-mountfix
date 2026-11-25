@@ -134,6 +134,13 @@ require_adm_session() {
     fi
 }
 
+require_post_method() {
+    if [ "${REQUEST_METHOD:-}" != "POST" ]; then
+        send_json_error "Method not allowed: POST required"
+        exit 0
+    fi
+}
+
 ####################################################################
 # Function to load mountfix configuration or return defaults
 ####################################################################

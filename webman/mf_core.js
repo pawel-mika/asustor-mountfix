@@ -7,6 +7,9 @@ Ext.define('AS.ARC.apps.MountFix.core', {
 
     constructor: function (config) {
         Ext.apply(this, config);
+        this.maskStack = [];
+        this._pollTimer = null;
+        this._pollActive = false;
         this.callParent();
         this.init();
     },
@@ -198,7 +201,6 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     itemId: 'btnCopyToTarget',
                                     handler: function () {
                                         fn.migrateSelectedApp();
-                                        console.log('copy to target');
                                     },
                                 },
                                 {
@@ -275,7 +277,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
             width: 640,
             height: 640,
             layout: 'fit',
-            taskIcon: '..apps/MountFix/images/icon-app-task.png',
+            taskIcon: '../apps/MountFix/images/icon-app-task.png',
             items: [mainPanel],
             listeners: {
                 afterrender: function (win) {
@@ -284,7 +286,9 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                         Ps.initialize(win.body.dom);
                     }
                     fn.loadConfig(); // Load initial config
-                    fn.getApps(); // Load list of apps
+                },
+                beforeclose: function () {
+                    fn.stopMigrationMonitor();
                 },
             },
         });

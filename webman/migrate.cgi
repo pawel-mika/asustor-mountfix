@@ -23,6 +23,7 @@ APP_PARAM=$(url_decode "$APP_PARAM_RAW")
 FORCE=$(url_decode "$FORCE_RAW")
 
 if [ "$ACTION" = "migrate" ]; then
+    require_post_method
     if RESPONSE=$(start_app_transfer "$TARGET_VOL" "$APP_PARAM" "$FORCE"); then
         send_response true "\"result\": $RESPONSE"
     else
@@ -30,6 +31,7 @@ if [ "$ACTION" = "migrate" ]; then
         send_response false "\"result\": $RESPONSE"
     fi
 elif [ "$ACTION" = "sync_back" ]; then
+    require_post_method
     if RESPONSE=$(start_app_sync_back "$TARGET_VOL" "$APP_PARAM"); then
         send_response true "\"result\": $RESPONSE"
     else

@@ -366,8 +366,10 @@ run_cgi() {
     local qs="$2"
     local auth_bin="${3:-$MOCK_ADM_AUTH}"
     local stdin_data="${4:-}"
+    local method="${5:-GET}"
 
     printf '%s' "$stdin_data" | \
+        REQUEST_METHOD="$method" \
         QUERY_STRING="$qs" \
         ADM_AUTH_CGI="$auth_bin" \
         MOUNTFIX_WEBMAN_COMMON_SH="${MOUNTFIX_WEBMAN_COMMON_SH:-$REPO_ROOT/webman/scripts/common.sh}" \
@@ -481,15 +483,15 @@ jq -e '
 ' >/dev/null <<<"$VAL_OK" || fail "validate.cgi valid response mismatch: $VAL_OK"
 
 # 9c. migrate.cgi propagates outer success:false on start_app_transfer / start_app_sync_back failures
-MIG_EXISTS=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/migrate.cgi" "$VALID_SID&act=migrate&target=/volume2&app=docker-ce")" "migrate.cgi target_exists")
+MIG_EXISTS=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/migrate.cgi" "$VALID_SID&act=migrate&target=/volume2&app=docker-ce" "$MOCK_ADM_AUTH" "" "POST")" "migrate.cgi target_exists")
 jq -e '.success == false and .result.success == false and .result.target_exists == true' >/dev/null <<<"$MIG_EXISTS" || \
     fail "migrate.cgi target_exists propagation mismatch: $MIG_EXISTS"
 
-MIG_BAD_TGT=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/migrate.cgi" "$VALID_SID&act=migrate&target=../bad&app=docker-ce")" "migrate.cgi bad target")
+MIG_BAD_TGT=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/migrate.cgi" "$VALID_SID&act=migrate&target=../bad&app=docker-ce" "$MOCK_ADM_AUTH" "" "POST")" "migrate.cgi bad target")
 jq -e '.success == false and .result.success == false and .result.error == "Invalid target volume"' >/dev/null <<<"$MIG_BAD_TGT" || \
     fail "migrate.cgi bad target mismatch: $MIG_BAD_TGT"
 
-SYNC_BAD_APP=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/migrate.cgi" "$VALID_SID&act=sync_back&target=/volume2&app=MountFix")" "migrate.cgi sync_back MountFix")
+SYNC_BAD_APP=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/migrate.cgi" "$VALID_SID&act=sync_back&target=/volume2&app=MountFix" "$MOCK_ADM_AUTH" "" "POST")" "migrate.cgi sync_back MountFix")
 jq -e '.success == false and .result.success == false and .result.error == "Invalid app name"' >/dev/null <<<"$SYNC_BAD_APP" || \
     fail "migrate.cgi sync_back MountFix mismatch: $SYNC_BAD_APP"
 
@@ -498,7 +500,7 @@ jq -e '.success == true and .result.status == "idle"' >/dev/null <<<"$MIG_STATUS
     fail "migrate.cgi status mismatch: $MIG_STATUS"
 
 # 9d. mount.cgi rejects invalid app/target with unified JSON response & guards against empty output
-MNT_BAD=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/mount.cgi" "$VALID_SID&act=mount&target=/volume2&app=MountFix")" "mount.cgi MountFix")
+MNT_BAD=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/mount.cgi" "$VALID_SID&act=mount&target=/volume2&app=MountFix" "$MOCK_ADM_AUTH" "" "POST")" "mount.cgi MountFix")
 jq -e '.success == false and .error == "Invalid app name"' >/dev/null <<<"$MNT_BAD" || \
     fail "mount.cgi MountFix mismatch: $MNT_BAD"
 
@@ -508,10 +510,10 @@ cat <<EOF > "$EMPTY_MOUNT_COMMON"
 mount_app() { return 1; }
 unmount_app() { return 1; }
 EOF
-MNT_EMPTY=$(assert_cgi_json "$(MOUNTFIX_WEBMAN_COMMON_SH="$EMPTY_MOUNT_COMMON" run_cgi "$REPO_ROOT/webman/mount.cgi" "$VALID_SID&act=mount&target=/volume2&app=docker-ce")" "mount.cgi empty mount_app output")
+MNT_EMPTY=$(assert_cgi_json "$(MOUNTFIX_WEBMAN_COMMON_SH="$EMPTY_MOUNT_COMMON" run_cgi "$REPO_ROOT/webman/mount.cgi" "$VALID_SID&act=mount&target=/volume2&app=docker-ce" "$MOCK_ADM_AUTH" "" "POST")" "mount.cgi empty mount_app output")
 jq -e '.success == false and .error == "Mount operation failed"' >/dev/null <<<"$MNT_EMPTY" || \
     fail "mount.cgi empty mount_app fallback mismatch: $MNT_EMPTY"
-UMNT_EMPTY=$(assert_cgi_json "$(MOUNTFIX_WEBMAN_COMMON_SH="$EMPTY_MOUNT_COMMON" run_cgi "$REPO_ROOT/webman/mount.cgi" "$VALID_SID&act=unmount&target=/volume2&app=docker-ce")" "mount.cgi empty unmount_app output")
+UMNT_EMPTY=$(assert_cgi_json "$(MOUNTFIX_WEBMAN_COMMON_SH="$EMPTY_MOUNT_COMMON" run_cgi "$REPO_ROOT/webman/mount.cgi" "$VALID_SID&act=unmount&target=/volume2&app=docker-ce" "$MOCK_ADM_AUTH" "" "POST")" "mount.cgi empty unmount_app output")
 jq -e '.success == false and .error == "Unmount operation failed"' >/dev/null <<<"$UMNT_EMPTY" || \
     fail "mount.cgi empty unmount_app fallback mismatch: $UMNT_EMPTY"
 
@@ -532,11 +534,11 @@ EXPECTED_REPO_VER=$(jq -r '.general.version' "$REPO_ROOT/CONTROL/config.json")
 jq -e --arg v "$EXPECTED_REPO_VER" '.success == true and .version == $v' >/dev/null <<<"$CFG_REAL_VER" || \
     fail "config.cgi repo version mismatch: $CFG_REAL_VER"
 
-CFG_SET_BAD=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/config.cgi" "$VALID_SID&act=set" "$MOCK_ADM_AUTH" '{"targetVolume":"/volume2","selectedApps":[{"name":"MountFix"}]}')" "config.cgi set bad")
+CFG_SET_BAD=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/config.cgi" "$VALID_SID&act=set" "$MOCK_ADM_AUTH" '{"targetVolume":"/volume2","selectedApps":[{"name":"MountFix"}]}' "POST")" "config.cgi set bad")
 jq -e '.success == false and .error == "Failed to save config"' >/dev/null <<<"$CFG_SET_BAD" || \
     fail "config.cgi set bad mismatch: $CFG_SET_BAD"
 
-CFG_SET_OK=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/config.cgi" "$VALID_SID&act=set" "$MOCK_ADM_AUTH" '{"targetVolume":"/volume2","selectedApps":[{"name":"entware"}]}')" "config.cgi set ok")
+CFG_SET_OK=$(assert_cgi_json "$(run_cgi "$REPO_ROOT/webman/config.cgi" "$VALID_SID&act=set" "$MOCK_ADM_AUTH" '{"targetVolume":"/volume2","selectedApps":[{"name":"entware"}]}' "POST")" "config.cgi set ok")
 jq -e '.success == true and .msg == "Settings saved"' >/dev/null <<<"$CFG_SET_OK" || \
     fail "config.cgi set ok mismatch: $CFG_SET_OK"
 
@@ -924,4 +926,22 @@ fi
 jq -e '.success == true and (.apps | length == 2) and (.apps[0].sourceSize | length > 0)' >/dev/null <<<"$VAL_BATCH" || \
     fail "validate.cgi batched output invalid: $VAL_BATCH"
 
-echo "PASS: All shared library, F14 protection, url_decode, JSON helper, CGI hardening, F13 NVMe/df, F3, and batched du tests passed."
+# ---------------------------------------------------------------------------
+# 15. F5 remainder: mutating CGI actions reject GET (POST required)
+# ---------------------------------------------------------------------------
+echo "Test 15: Mutating CGI actions enforce POST..."
+for spec in \
+    "$REPO_ROOT/webman/config.cgi|$VALID_SID&act=set" \
+    "$REPO_ROOT/webman/mount.cgi|$VALID_SID&act=mount&target=/volume2&app=docker-ce" \
+    "$REPO_ROOT/webman/mount.cgi|$VALID_SID&act=unmount&target=/volume2&app=docker-ce" \
+    "$REPO_ROOT/webman/migrate.cgi|$VALID_SID&act=migrate&target=/volume2&app=docker-ce" \
+    "$REPO_ROOT/webman/migrate.cgi|$VALID_SID&act=sync_back&target=/volume2&app=docker-ce"
+do
+    cgi_file="${spec%%|*}"
+    cgi_qs="${spec#*|}"
+    get_res=$(assert_cgi_json "$(run_cgi "$cgi_file" "$cgi_qs" "$MOCK_ADM_AUTH" "" "GET")" "GET rejected on $(basename "$cgi_file")")
+    jq -e '.success == false and (.error | contains("POST required"))' >/dev/null <<<"$get_res" || \
+        fail "Expected POST required rejection for GET on $spec, got: $get_res"
+done
+
+echo "PASS: All shared library, F14 protection, url_decode, JSON helper, CGI hardening, F13 NVMe/df, F3, batched du, and POST-only tests passed."

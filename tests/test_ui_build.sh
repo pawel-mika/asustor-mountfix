@@ -16,13 +16,14 @@ grep -q "AS.ARC.msgWindow" webman/mountfix.js || { echo "FAIL: AS.ARC.msgWindow 
 # Check that unmount is blocked when app is running
 grep -q "btnUnmount.setDisabled(running || !mounted)" webman/mountfix.js || { echo "FAIL: unmount button must be disabled when running"; exit 1; }
 
-# Ensure no dead console.log('sync back') stub or stale rsync -au text remains
-if grep -q "console.log('sync back')" webman/mountfix.js; then
-    echo "FAIL: console.log('sync back') stub still present"; exit 1
-fi
-if grep -q "rsync -au" webman/mountfix.js; then
-    echo "FAIL: stale 'rsync -au' wording still present in mountfix.js"; exit 1
-fi
+# Ensure no dead code, debug leftovers, or path typos remain (F9, F17)
+for forbidden in "console.log('sync back')" "rsync -au" "window.qq" "getApps(" "..apps/MountFix"; do
+    if grep -qF "$forbidden" webman/mountfix.js; then
+        echo "FAIL: forbidden leftover '$forbidden' still present in mountfix.js"; exit 1
+    fi
+done
+grep -q "taskIcon: '../apps/MountFix/images/icon-app-task.png'" webman/mountfix.js || { echo "FAIL: fixed taskIcon path missing"; exit 1; }
+grep -q "stopMigrationMonitor" webman/mountfix.js || { echo "FAIL: stopMigrationMonitor missing"; exit 1; }
 
 # Check that Target Directory Exists prompt helper is present and used on failure/success
 grep -q "promptTargetExists" webman/mountfix.js || { echo "FAIL: promptTargetExists missing from mountfix.js"; exit 1; }
@@ -37,18 +38,19 @@ const assert = require('assert');
 
 let actionsProto = null;
 let nextAjaxResponse = null;
+let lastAjaxOpts = null;
 let createdDialogs = [];
-let intervalCallbacks = [];
-let clearedIntervals = [];
+let timeoutCallbacks = [];
+let clearedTimeouts = [];
 
 const sandbox = {
     console,
-    setInterval: (fn) => {
-        intervalCallbacks.push(fn);
-        return intervalCallbacks.length;
+    setTimeout: (fn) => {
+        timeoutCallbacks.push(fn);
+        return timeoutCallbacks.length;
     },
-    clearInterval: (id) => {
-        clearedIntervals.push(id);
+    clearTimeout: (id) => {
+        clearedTimeouts.push(id);
     },
     window: {},
     AS: {
@@ -62,6 +64,7 @@ const sandbox = {
                 },
             },
             ajax: (opts) => {
+                lastAjaxOpts = opts;
                 // Simulate ADM AS.ARC.ajax: top-level success===false routes to options.failure(d)
                 if (nextAjaxResponse && nextAjaxResponse.success === false) {
                     opts.failure && opts.failure(nextAjaxResponse);
@@ -161,21 +164,21 @@ assert.strictEqual(p.maskStack.length, 0);
 assert.strictEqual(p.statuses.at(-1).msg, 'Error: Failed to save config');
 assert.strictEqual(p.statuses.at(-1).isErr, true);
 
-// 6. monitorMigrationStatus: does NOT finish on progress: 100 with state: 'running', finishes only on state: 'done'
-intervalCallbacks = [];
-clearedIntervals = [];
+// 6. monitorMigrationStatus: chained setTimeout does NOT finish on progress: 100 with state: 'running', finishes only on state: 'done'
+timeoutCallbacks = [];
+clearedTimeouts = [];
 p = makePage();
 let completedCount = 0;
 p.monitorMigrationStatus('Copying docker-ce', () => { completedCount += 1; });
-assert.strictEqual(intervalCallbacks.length, 1);
+assert.strictEqual(timeoutCallbacks.length, 1);
 assert.strictEqual(p.maskStack.length, 1);
 
 nextAjaxResponse = {
     success: true,
     result: { app: 'docker-ce', state: 'running', progress: 100, lastLine: '5,242,880 100% 10MB/s', pid: 1234 },
 };
-intervalCallbacks[0]();
-assert.strictEqual(clearedIntervals.length, 0, 'must NOT clear interval while state is running even at 100%');
+timeoutCallbacks[0]();
+assert.strictEqual(timeoutCallbacks.length, 2, 'must schedule next setTimeout while state is running even at 100%');
 assert.strictEqual(p.maskStack.length, 1, 'must stay masked while state is running');
 assert.strictEqual(completedCount, 0);
 assert.strictEqual(p.validateCalls.length, 0);
@@ -184,23 +187,23 @@ nextAjaxResponse = {
     success: true,
     result: { app: 'docker-ce', state: 'done', progress: 100, lastLine: 'DONE | 100% | Completed', pid: null },
 };
-intervalCallbacks[0]();
-assert.strictEqual(clearedIntervals.length, 1, 'must clear interval on state === done');
+timeoutCallbacks[1]();
+assert.strictEqual(timeoutCallbacks.length, 2, 'must NOT schedule another setTimeout on state === done');
 assert.strictEqual(p.maskStack.length, 0, 'must unmaskAll on state === done');
 assert.strictEqual(completedCount, 1);
 assert.strictEqual(p.validateCalls.length, 1);
 
 // 7. monitorMigrationStatus: stops polling and surfaces error on state: 'error'
-intervalCallbacks = [];
-clearedIntervals = [];
+timeoutCallbacks = [];
+clearedTimeouts = [];
 p = makePage();
 p.monitorMigrationStatus('Copying docker-ce');
 nextAjaxResponse = {
     success: true,
     result: { app: 'docker-ce', state: 'error', progress: 0, lastLine: 'ERROR | Transfer failed (exit code: 23)', pid: null },
 };
-intervalCallbacks[0]();
-assert.strictEqual(clearedIntervals.length, 1, 'must clear interval on state === error');
+timeoutCallbacks[0]();
+assert.strictEqual(timeoutCallbacks.length, 1, 'must NOT reschedule on state === error');
 assert.strictEqual(p.maskStack.length, 0, 'must unmaskAll on state === error');
 assert.strictEqual(p.statuses.at(-1).isErr, true);
 assert(p.statuses.at(-1).msg.includes('ERROR | Transfer failed'));
@@ -295,6 +298,61 @@ p.win.down = (sel) => {
 p.setMfConfig({ config: { targetVolume: '/volume2', selectedApps: [] }, apps: [], volumes: [{ volume: '/volume2' }] });
 assert.deepStrictEqual(comboEvents, ['suspend', 'set:/volume2', 'resume'], 'setMfConfig must suspend/resume combo events');
 sandbox.AS.ARC.ajax = origAjax;
+
+// 15. F9: maskStack is NOT shared on Actions prototype; stopMigrationMonitor cancels active timer
+assert.strictEqual(actionsProto.maskStack, undefined, 'maskStack must not live on Actions prototype');
+timeoutCallbacks = [];
+clearedTimeouts = [];
+p = makePage();
+p.monitorMigrationStatus('Copying docker-ce');
+assert.strictEqual(timeoutCallbacks.length, 1);
+p.stopMigrationMonitor();
+assert.strictEqual(clearedTimeouts.length, 1, 'stopMigrationMonitor must clear pending setTimeout');
+assert.strictEqual(p._pollActive, false);
+
+// 16. F17 & POST-only: mutating calls use POST and migrateSelectedApp sends no bogus config body
+p = makePage();
+nextAjaxResponse = { success: true, result: { success: true } };
+p.migrateSelectedApp(false);
+assert.strictEqual(lastAjaxOpts.method, 'POST', 'migrateSelectedApp must use POST');
+assert.strictEqual(lastAjaxOpts.params, undefined, 'migrateSelectedApp must not send unused getMfConfig() POST body');
+
+p = makePage();
+nextAjaxResponse = { success: true, result: { success: true } };
+p.syncBackSelectedApp(null, true);
+assert.strictEqual(lastAjaxOpts.method, 'POST', 'syncBackSelectedApp must use POST');
+
+p = makePage();
+nextAjaxResponse = { success: true, message: 'Mounted' };
+p.bindMountAction('mount', 'Mounting...', 'Mounted');
+assert.strictEqual(lastAjaxOpts.method, 'POST', 'bindMountAction must use POST');
+
+p = makePage();
+nextAjaxResponse = { success: true };
+p.saveConfig();
+assert.strictEqual(lastAjaxOpts.method, 'POST', 'saveConfig must use POST');
+
+// 17. Entware relocation warning appears before copying or mounting entware
+createdDialogs = [];
+p = makePage();
+p.selectedApp = { get: (k) => (k === 'name' ? 'entware' : false) };
+lastAjaxOpts = null;
+p.migrateSelectedApp(false);
+assert.strictEqual(lastAjaxOpts, null, 'entware migrate must wait for warning confirmation');
+assert.strictEqual(createdDialogs.length, 1);
+assert.strictEqual(createdDialogs[0].cfg.title, 'Warning: Relocating Entware');
+
+createdDialogs = [];
+p = makePage();
+p.selectedApp = { get: (k) => (k === 'name' ? 'entware' : false) };
+lastAjaxOpts = null;
+p.mountSelectedApp();
+assert.strictEqual(lastAjaxOpts, null, 'entware mount must wait for warning confirmation');
+assert.strictEqual(createdDialogs.length, 1);
+assert.strictEqual(createdDialogs[0].cfg.title, 'Warning: Relocating Entware');
+nextAjaxResponse = { success: true, message: 'Mounted' };
+createdDialogs[0].cfg.fbar[0].handler();
+assert.strictEqual(lastAjaxOpts.method, 'POST', 'confirming entware mount warning must execute POST mount');
 EOF
 fi
 
