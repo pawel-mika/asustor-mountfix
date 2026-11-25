@@ -2,7 +2,7 @@
   "general": {
     "package": "MountFix",
     "name": "MountFix",
-    "version": "0.0.0.108",
+    "version": "0.0.0.115",
     "depends": [
       "entware"
     ],
@@ -10,7 +10,7 @@
     "developer": "Pablo",
     "maintainer": "Pablo",
     "email": "ketonal80@gmail.com",
-    "website": "",
+    "website": "https://mikedev.eu",
     "architecture": "x86-64",
     "firmware": "5.0"
   },

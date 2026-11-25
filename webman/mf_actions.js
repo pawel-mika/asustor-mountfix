@@ -43,9 +43,8 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                             Ext.String.htmlEncode(appName) +
                             '</b> in AppCentral first to copy, mount, unmount, or sync back.',
                     );
-                    actionHint.show();
                 } else {
-                    actionHint.hide();
+                    actionHint.update('&nbsp;');
                 }
             }
         } else {
@@ -55,7 +54,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             btnUnmount.disable();
             btnSyncBack.disable();
             if (actionHint) {
-                actionHint.hide();
+                actionHint.update('&nbsp;');
             }
         }
     },
@@ -213,8 +212,8 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         }
         if (newConfig.version) {
             var verField = page.win.down('#displayVersion');
-            if (verField) {
-                verField.setValue(newConfig.version);
+            if (verField && verField.update) {
+                verField.update('v' + Ext.String.htmlEncode(newConfig.version));
             }
         }
     },
@@ -239,8 +238,8 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             var confirmDlg = Ext.create('AS.ARC.msgWindow', {
                 parentWin: page.win,
                 title: 'Target Directory Exists',
-                width: 500,
-                height: 220,
+                width: 620,
+                height: 280,
                 iconType: 'warning',
                 asItems: [
                     {
@@ -310,8 +309,8 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             var dlg = Ext.create('AS.ARC.msgWindow', {
                 parentWin: page.win,
                 title: 'Warning: Relocating Entware',
-                width: 500,
-                height: 210,
+                width: 620,
+                height: 270,
                 iconType: 'warning',
                 asItems: [{ xtype: 'displayfield', value: bodyHtml }],
                 fbar: [
@@ -452,8 +451,8 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             var confirmDlg = Ext.create('AS.ARC.msgWindow', {
                 parentWin: page.win,
                 title: 'Sync back: ' + app,
-                width: 500,
-                height: 220,
+                width: 620,
+                height: 280,
                 iconType: 'warning',
                 asItems: [
                     {
@@ -548,8 +547,8 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             var dlg = Ext.create('AS.ARC.msgWindow', {
                 parentWin: page.win,
                 title: 'Unmount: ' + app,
-                width: 500,
-                height: 230,
+                width: 620,
+                height: 290,
                 iconType: 'question',
                 asItems: [
                     {

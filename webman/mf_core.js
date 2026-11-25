@@ -94,9 +94,10 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                             itemId: 'appGrid',
                             store: appStore,
                             border: true,
-                            columnLines: true,
+                            columnLines: false,
                             scrollable: true,
-                            padding: '0 0 30 0',
+                            // ExtJS 4 fieldset+fit does not subtract legend height (~28px), clipping the last grid row without bottom padding
+                            padding: '0 0 28 0',
                             // Running apps stay selectable (need select to Unmount).
                             // x-item-disabled blocked clicks — do not use it on rows.
                             viewConfig: {
@@ -128,15 +129,15 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     xtype: 'checkcolumn',
                                     text: 'Enabled',
                                     dataIndex: 'enabled',
-                                    width: 60,
+                                    width: 82,
                                     resizable: false,
                                     processEvent: function () {
                                         return false;
                                     },
                                     renderer: function (value) {
-                                        var color = value ? 'green' : 'gray';
+                                        var color = value ? '#16a34a' : '#6b7280';
                                         var text = value ? 'Running' : 'Stopped';
-                                        return '<span style="color:' + color + '; font-weight:light; font-size:9px;">● ' + text + '</span>';
+                                        return '<span style="color:' + color + '; font-size:11px;">● ' + text + '</span>';
                                     },
                                 },
                                 {
@@ -165,14 +166,22 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                 {
                                     text: 'Source Size',
                                     dataIndex: 'sourceSize',
-                                    width: 80,
+                                    width: 90,
+                                    align: 'right',
                                     menuDisabled: true,
+                                    renderer: function (v) {
+                                        return v && v !== '0' ? v : '<span style="color:#9ca3af;">—</span>';
+                                    },
                                 },
                                 {
                                     text: 'Target Size',
                                     dataIndex: 'targetSize',
-                                    width: 80,
+                                    width: 90,
+                                    align: 'right',
                                     menuDisabled: true,
+                                    renderer: function (v) {
+                                        return v && v !== '0' ? v : '<span style="color:#9ca3af;">—</span>';
+                                    },
                                 },
                                 {
                                     text: 'Mounted on',
@@ -195,6 +204,9 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                             xtype: 'fieldcontainer',
                             layout: 'hbox',
                             defaultType: 'button',
+                            defaults: {
+                                margin: '0 8 0 0',
+                            },
                             items: [
                                 {
                                     xtype: 'button',
@@ -233,58 +245,76 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                         {
                             xtype: 'component',
                             itemId: 'actionHint',
-                            hidden: true,
-                            margin: '6 0 4 0',
-                            style: 'color: #b45309; font-size: 11px;',
-                            html: '',
-                        },
-                        {
-                            xtype: 'displayfield',
-                            itemId: 'displayVersion',
-                            fieldLabel: 'Version',
-                            value: '0.0.0.108',
+                            margin: '6 0 0 0',
+                            height: 18,
+                            style: 'color: #b45309; font-size: 11px; line-height: 18px;',
+                            html: '&nbsp;',
                         },
                     ],
                 },
             ],
 
             // --- FOOTER ---
-            fbar: [
+            dockedItems: [
                 {
-                    xtype: 'container',
-                    itemId: 'statusInfo',
-                    html: '',
-                    style: 'color: #333; font-size: 12px;',
-                    margin: '0 16 0 16',
-                },
-                { xtype: 'tbfill' }, // Filler moves buttons to the right
-                {
-                    xtype: 'button',
-                    text: 'Apply',
-                    itemId: 'btnApply',
-                    width: 85,
-                    handler: function () {
-                        fn.saveConfig();
+                    xtype: 'toolbar',
+                    dock: 'bottom',
+                    ui: 'footer',
+                    padding: '8 16',
+                    layout: {
+                        type: 'hbox',
+                        align: 'middle',
                     },
-                },
-                {
-                    xtype: 'button',
-                    text: 'Cancel',
-                    width: 85,
-                    handler: function () {
-                        fn.win.close();
-                    },
+                    items: [
+                        {
+                            xtype: 'component',
+                            itemId: 'displayVersion',
+                            html: '',
+                            style: 'color: #888; font-size: 11px;',
+                        },
+                        { xtype: 'tbfill' },
+                        {
+                            xtype: 'container',
+                            itemId: 'statusInfo',
+                            html: '',
+                            style: 'color: #333; font-size: 12px;',
+                            margin: '0 12 0 8',
+                        },
+                        {
+                            xtype: 'button',
+                            text: 'Apply',
+                            itemId: 'btnApply',
+                            width: 85,
+                            handler: function () {
+                                fn.saveConfig();
+                            },
+                        },
+                        {
+                            xtype: 'button',
+                            text: 'Cancel',
+                            width: 85,
+                            handler: function () {
+                                fn.win.close();
+                            },
+                        },
+                    ],
                 },
             ],
         });
+
+        // Compute balanced desktop window size (~80% viewport height, landscape proportions)
+        var vh = (Ext.Element && Ext.Element.getViewportHeight ? Ext.Element.getViewportHeight() : window.innerHeight) || 720;
+        var vw = (Ext.Element && Ext.Element.getViewportWidth ? Ext.Element.getViewportWidth() : window.innerWidth) || 1024;
+        var winHeight = Math.max(540, Math.min(Math.floor(vh * 0.8), vh - 90));
+        var winWidth = Math.max(760, Math.min(Math.floor(vw * 0.78), 1020));
 
         // Creating window through ADM desktop
         this.win = this.desktop.createWindow({
             app: fn.app,
             id: fn.id,
             title: 'MountFix',
-            width: 640,
-            height: 640,
+            width: winWidth,
+            height: winHeight,
             layout: 'fit',
             taskIcon: '../apps/MountFix/images/icon-app-task.png',
             items: [mainPanel],

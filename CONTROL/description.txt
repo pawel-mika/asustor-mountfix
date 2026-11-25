@@ -1,1 +1,12 @@
-MountFix is a tool to allow users move .@plugins to different volume (possible mounted on a SSD)
+MountFix lets you transparently relocate selected AppCentral applications from Volume 1 (/volume1/.@plugins/AppCentral) to a faster SSD/NVMe volume using bind mounts (mount --bind), without breaking ADM integration.
+
+Features:
+- Copy and sync-back application data in the background with safe rsync flags (hard links, xattrs/ACLs, mirror mode)
+- Automatic boot and shutdown mount management (S02MountFix / K02MountFix) with jq-free boot path and safe per-path unmount guards
+- Native ADM UI with SSD/NVMe volume detection, disk usage checks, and boot-config mismatch warnings
+
+Note: Always stop an application in AppCentral before copying, mounting, unmounting, or syncing back, and keep current backups of critical data.
+
+Disclaimer: Use this software at your own risk. MountFix performs low-level bind-mount, file-mirroring, and kernel (sysctl) operations. It is provided "as is", without any warranty; the author is not liable for any data loss, service downtime, system instability, or hardware damage.
+
+Website: https://mikedev.eu

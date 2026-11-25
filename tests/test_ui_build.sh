@@ -391,8 +391,7 @@ assert.strictEqual(statusLog[0].persist, true, 'Validating status must persist u
 assert.strictEqual(statusLog.at(-1).msg, '', 'Validating status must clear on completion');
 assert.strictEqual(committed, true, 'validate() must call record.commit() to clear dirty markers');
 
-// 20. updateActionsUI shows #actionHint when a running app is selected and hides when stopped
-let hintVisible = false;
+// 20. updateActionsUI updates #actionHint for running app and clears for stopped app; setMfConfig sets window title version
 let hintHtml = '';
 const makeBtn = () => ({ setText() {}, setDisabled() {}, disable() {} });
 p = makePage();
@@ -400,20 +399,26 @@ p.win.down = (sel) => {
     if (sel === '#actionHint') {
         return {
             update(h) { hintHtml = h; },
-            show() { hintVisible = true; },
-            hide() { hintVisible = false; },
         };
     }
     return makeBtn();
 };
 p.selectedApp = { get: (k) => (k === 'name' ? 'minidlna' : k === 'enabled') };
 p.updateActionsUI();
-assert.strictEqual(hintVisible, true, 'actionHint must be visible for running app');
-assert(hintHtml.includes('minidlna') && hintHtml.includes('AppCentral'));
+assert(hintHtml.includes('minidlna') && hintHtml.includes('AppCentral'), 'actionHint must explain stopping running app');
 
 p.selectedApp = { get: (k) => (k === 'name' ? 'minidlna' : false) };
 p.updateActionsUI();
-assert.strictEqual(hintVisible, false, 'actionHint must hide for stopped app');
+assert.strictEqual(hintHtml, '&nbsp;', 'actionHint must clear for stopped app');
+
+let verHtml = '';
+let setTitleCalled = false;
+p = makePage();
+p.win.setTitle = () => { setTitleCalled = true; };
+p.win.down = (sel) => (sel === '#displayVersion' ? { update(h) { verHtml = h; } } : null);
+p.setMfConfig({ config: { targetVolume: '/volume2', selectedApps: [] }, apps: [], volumes: [], version: '0.0.0.111' });
+assert.strictEqual(setTitleCalled, false, 'setMfConfig must NOT call win.setTitle (breaks ADM header icon)');
+assert.strictEqual(verHtml, 'v0.0.0.111', 'setMfConfig must display version in footer #displayVersion');
 EOF
 fi
 

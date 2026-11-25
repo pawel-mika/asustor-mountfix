@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Date** | 2026-11-19 (updated 2026-11-25) |
-| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 implemented & verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branch 1 implemented in `0.0.0.106` (installed on NAS, see §8); Stage 2 Branch 2 implemented in `0.0.0.107` (`fix/transfer-engine`, see §9); Stage 2 Branch 3 implemented in `0.0.0.108` (`fix/ui-state-and-validation`, see §10) |
+| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 implemented & verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branch 1 implemented in `0.0.0.106` (installed on NAS, see §8); Stage 2 Branch 2 implemented in `0.0.0.107` (`fix/transfer-engine`, see §9); Stage 2 Branch 3 implemented & verified on NAS in `0.0.0.108`–`0.0.0.115` (`fix/ui-state-and-validation`, see §10) |
 | **Scope** | Whole repository: `CONTROL/`, `webman/` (CGI + shell library + ExtJS UI), `build.sh` / `buildJs.sh`, `tests/`, `etc/` |
-| **Status** | **Stage 1 complete & production-verified** (`F1`, `F2`, `F11` start-only `sysctl`, persistent logging, ADM syslog warnings, shutdown-aware cleanup). **Stage 2 Branch 1 implemented (`0.0.0.106`, installed on NAS):** `F5`, `F6`, `F7`, `F13`, `F14` and shell items of `F17` (see §8). **Stage 2 Branch 2 implemented (`0.0.0.107`, `fix/transfer-engine`):** `F4`, `F8`, `F12` (see §9). **Stage 2 Branch 3 implemented (`0.0.0.108`, `fix/ui-state-and-validation`):** `F3`, `F9`, `F16`, JS items of `F17`, `IDEAS.md` §1, `entware` UI warning, and `POST`-only mutating CGIs (see §10). **Remaining:** `F10`, `F11` (UI option), `F15`, and `CONTROL/common.sh` shim removal (Branch 4). |
+| **Status** | **Stage 1 complete & production-verified** (`F1`, `F2`, `F11` start-only `sysctl`, persistent logging, ADM syslog warnings, shutdown-aware cleanup). **Stage 2 Branch 1 implemented (`0.0.0.106`, installed on NAS):** `F5`, `F6`, `F7`, `F13`, `F14` and shell items of `F17` (see §8). **Stage 2 Branch 2 implemented (`0.0.0.107`, `fix/transfer-engine`):** `F4`, `F8`, `F12` (see §9). **Stage 2 Branch 3 implemented & verified on NAS (`0.0.0.108`–`0.0.0.115`, `fix/ui-state-and-validation`):** `F3`, `F9`, `F16`, JS items of `F17`, `IDEAS.md` §1, `entware` UI warning, `POST`-only mutating CGIs, and UI/manifest polish (see §10). **Remaining:** `F10`, `F11` (UI option), `F15`, and `CONTROL/common.sh` shim removal (Branch 4). |
 
 ---
 
@@ -595,17 +595,18 @@ Implemented as 2 atomic commits plus a version bump, verified locally with expan
 
 ---
 
-## 10. Stage 2 — Branch 3 Results (`fix/ui-state-and-validation`, `0.0.0.108`)
+## 10. Stage 2 — Branch 3 Results (`fix/ui-state-and-validation`, `0.0.0.108`–`0.0.0.115`)
 
-Implemented as 3 atomic commits plus version bump and documentation sync, verified locally with expanded backend and Node UI test suites (`tests/test_lib_and_cgi.sh` tests 1–15, `tests/test_ui_build.sh` tests 1–17).
+Implemented as 3 atomic commits plus live NAS UI/manifest polish (`0.0.0.109`–`0.0.0.115`), verified locally (`tests/test_lib_and_cgi.sh` tests 1–15, `tests/test_ui_build.sh` tests 1–20) and on ADM 5.1.5.
 
 | Commit | Findings | Summary |
 |---|---|---|
 | `9735d3d` | `F3` | Added `update_mountfix_app_config()` and `get_configured_apps_for_volume()` in `webman/scripts/common.sh`; `mount_app` / `unmount_app` now atomically sync `etc/mountfix.conf` and `etc/mounts.list` (`configUpdated` in response); `validate.cgi` emits per-app `configured` and `mismatch` (`configured_not_mounted` / `mounted_not_configured`); ExtJS grid shows mismatch warnings and makes the `Boot` checkcolumn read-only. |
 | `48216ad` | `F16`, `IDEAS.md` §1 | Replaced dual `du -sh` + `du -sk` with batched single-pass `du -sk` and pure `awk` `format_kb_human()`; suspended combo events in `setMfConfig()` to stop double `validate()` on open; made `validate(appName)` non-blocking and targeted for per-app actions; removed the parallel `validate()` race during *Unmount & Sync-back*. |
 | `81a44c1` | `F9`, `F17` (JS), `F5` (`POST`), `entware` warning | Moved `maskStack` to instance constructor; replaced `setInterval` with `beforeclose`-safe chained `setTimeout` (`stopMigrationMonitor`); removed dead `getApps()`, `requestConfig()`, `appsApiUrl`, `window.qq`, `console.log`, and unused `getMfConfig()` body on `migrate`; fixed `taskIcon` path typo (`../apps/...`); added `confirmEntwareAction()` warning for `entware` copy/mount; enforced `require_post_method()` on all mutating CGIs (`config.cgi?act=set`, `mount.cgi`, `migrate.cgi?act=migrate|sync_back`). |
+| `bf6a1f0` + UI polish | Live NAS UX (`0.0.0.108`–`0.0.0.115`) | Persistent `Validating...` status until response + `record.commit()` (no dirty red cell markers); immediate `target_exists` prompt without double overlay; `#actionHint` for running apps; responsive landscape window sizing (`~80%` viewport height); left-anchored footer version via `dockedItems`; enlarged `AS.ARC.msgWindow` dialogs (`620×270–290`); right-aligned size columns with `—`; updated `CONTROL/description.txt` (disclaimer + website) and `CONTROL/config.json` (`https://mikedev.eu`). |
 
 ### 10.1 Open items carried forward
 
-- **Pending live NAS verification (`0.0.0.108`):** Build `.apk` and verify the full authenticated UI flow on ADM 5.1.5 (single-pass `validate.cgi`, `POST` mutating CGIs, `Mount`/`Unmount` auto-updating `mounts.list`, mismatch warning rendering, and `entware` confirmation dialog).
 - **Branch 4 (`chore/lifecycle-and-repo-hygiene`):** `F15`, `F10`, `F11` (UI option), and removal of the `CONTROL/common.sh` shim.
+- **Post-Stage 2 (`IDEAS.md` §2):** Safe *Delete target* workflow.
