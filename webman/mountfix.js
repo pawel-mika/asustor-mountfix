@@ -1145,9 +1145,10 @@ Ext.define('AS.ARC.apps.MountFix.core', {
             height: winHeight,
             layout: 'fit',
             taskIcon: '../apps/MountFix/images/icon-app-task.png',
-            tools: [
+            // ADM AS.ARC.appWindow reads exTitleButtons (not tools) and applies cls to the inner <img>
+            exTitleButtons: [
                 {
-                    type: 'help',
+                    cls: 'x-tool-question',
                     tooltip: 'MountFix Quick Guide',
                     handler: function () {
                         fn.showHelpDialog();
