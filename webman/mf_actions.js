@@ -7,6 +7,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
     validateApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'validate.cgi',
     migrateApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'migrate.cgi',
     mountApiUrl: AS.ARC.util.getUserAppsPath() + 'MountFix/' + 'mount.cgi',
+    helpDocUrl: 'https://github.com/pawel-mika/asustor-mountfix#readme',
 
     cgiConfig: {}, // Placeholder for config loaded from CGI
 
@@ -734,6 +735,47 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         };
 
         page._pollTimer = setTimeout(poll, 500);
+    },
+
+    showHelpDialog: function () {
+        var page = this;
+        var docUrl = page.helpDocUrl || 'https://github.com/pawel-mika/asustor-mountfix#readme';
+        var bodyHtml =
+            '<div style="font-size: 12px; line-height: 18px;">' +
+            '<b>Relocate an app (HDD &rarr; SSD):</b><br>' +
+            '1. Stop the app in AppCentral &rarr; 2. <b>Copy to target</b> &rarr; 3. <b>Mount</b> &rarr; 4. Start the app.<br><br>' +
+            '<b>Move back to HDD (SSD &rarr; HDD):</b><br>' +
+            '1. Stop the app in AppCentral &rarr; 2. <b>Unmount &amp; Sync-back</b> &rarr; 3. Start the app.<br><br>' +
+            '<b>Important safety rules:</b><br>' +
+            '&bull; Always stop an application before copying, mounting, unmounting, or syncing back.<br>' +
+            '&bull; <b>Sync back</b> and overwriting an existing target use mirror mode (<code>--delete</code>).<br>' +
+            '&bull; Unmount all apps before uninstalling MountFix (uninstall is blocked while mounts are active).<br>' +
+            '&bull; Kernel <code>sysctl</code> tuning is optional (off by default) and applies on boot only.<br><br>' +
+            '<a href="' + docUrl + '" target="_blank" rel="noopener noreferrer" style="color: #007dff; text-decoration: underline;">' +
+            'Open full documentation on GitHub &rarr;</a>' +
+            '</div>';
+
+        if (Ext.ClassManager && Ext.ClassManager.isCreated('AS.ARC.msgWindow')) {
+            var dlg = Ext.create('AS.ARC.msgWindow', {
+                parentWin: page.win,
+                title: 'MountFix Quick Guide',
+                width: 640,
+                height: 360,
+                iconType: 'info',
+                asItems: [{ xtype: 'displayfield', value: bodyHtml }],
+                fbar: [
+                    {
+                        text: 'Close',
+                        handler: function () {
+                            dlg.close();
+                        },
+                    },
+                ],
+            });
+            dlg.show();
+        } else {
+            Ext.Msg.alert('MountFix Quick Guide', bodyHtml);
+        }
     },
 
     unmaskAll: function () {

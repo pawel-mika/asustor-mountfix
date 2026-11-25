@@ -436,6 +436,15 @@ assert.strictEqual(sysctlVal, true, 'setMfConfig must set #chkSysctlTuning from 
 assert.strictEqual(p.getMfConfig().enableSysctlTuning, true, 'getMfConfig must return boolean enableSysctlTuning=true');
 sysctlVal = false;
 assert.strictEqual(p.getMfConfig().enableSysctlTuning, false, 'getMfConfig must return boolean enableSysctlTuning=false');
+
+// 21. showHelpDialog opens Quick Guide modal with GitHub documentation link
+createdDialogs = [];
+p = makePage();
+p.showHelpDialog();
+assert.strictEqual(createdDialogs.length, 1, 'showHelpDialog must open AS.ARC.msgWindow');
+assert.strictEqual(createdDialogs[0].shown, true);
+assert.strictEqual(createdDialogs[0].cfg.title, 'MountFix Quick Guide');
+assert(createdDialogs[0].cfg.asItems[0].value.includes('https://github.com/pawel-mika/asustor-mountfix#readme'), 'Help dialog must include GitHub docs link');
 EOF
 fi
 

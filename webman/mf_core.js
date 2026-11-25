@@ -279,6 +279,15 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                             html: '',
                             style: 'color: #888; font-size: 11px;',
                         },
+                        {
+                            xtype: 'button',
+                            text: 'Help',
+                            itemId: 'btnHelp',
+                            margin: '0 0 0 8',
+                            handler: function () {
+                                fn.showHelpDialog();
+                            },
+                        },
                         { xtype: 'tbfill' },
                         {
                             xtype: 'container',

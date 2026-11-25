@@ -1,95 +1,131 @@
 # MountFix for ASUSTOR ADM
 
-A custom ADM plugin designed to migrate default AppCentral applications to alternate volumes (e.g., secondary SSD storage) using `mount --bind`.
+A custom ASUSTOR ADM plugin that transparently relocates AppCentral applications from the default `/volume1` HDD storage to a faster SSD/NVMe volume (e.g. `/volume2`) using Linux `mount --bind`.
 
-# Key Features:
+---
 
-Storage Optimization: Move heavy apps (Docker, PhotoGallery, etc.) from Volume 1 to any other volume without breaking ADM integration.
+## How It Works & Design Assumptions
 
-ADM Integrated UI: Native Look & Feel interface built with ExtJS.
+ASUSTOR ADM always installs AppCentral packages under `/volume1/.@plugins/AppCentral/<app>` (with `/usr/local/AppCentral/<app>` symlinked there) and does not let users pick a different volume. When `/volume1` is a mechanical HDD, I/O-heavy applications such as `docker-ce`, `photogallery`, or `download-center` suffer from slow disk latency.
 
-Boot-safe: Installs an ADM init script (`S02MountFix` / `K02MountFix`) that establishes bind mounts before relocated apps start (`jq`-free boot path via `etc/mounts.list`).
+MountFix solves this without modifying ADM or reconfiguring applications:
 
-Smart Cleanup: Fast non-lazy unmounting with per-path `/proc` holder detection, persistent logging (`var/mountfix.log`), and shutdown-aware cleanup so ADM `stormand` always unmounts volumes cleanly.
+1. **Copy to target** — `rsync` copies `/volume1/.@plugins/AppCentral/<app>` to `/volumeX/AppCentral/<app>`.
+2. **Bind-mount** — `mount --bind /volumeX/AppCentral/<app> /volume1/.@plugins/AppCentral/<app>` overlays the SSD directory onto the original path. ADM and the app keep using their standard paths while all reads/writes hit the SSD.
+3. **Boot & shutdown persistence** — ADM init scripts (`S02MountFix` / `K02MountFix`) automatically re-establish bind mounts at boot *before* relocated apps start and detach them cleanly at shutdown *after* apps stop.
 
-# Prerequisites
+Key assumptions:
+- **SSD/NVMe target required:** The UI detects block-device rotational flags (SATA/SAS RAID and NVMe/MMC) and blocks HDD volumes from being selected as targets.
+- **HDD fallback copy is preserved:** MountFix keeps the original `/volume1/.@plugins/AppCentral/<app>` directory underneath the bind mount. Use **Sync back** to mirror newer SSD data back to `/volume1` before reverting or changing disks.
+- **Apps must be stopped before any operation:** Copy, Mount, Unmount, and Sync-back are only safe while the target application is stopped in AppCentral.
 
-* Installed Entware (`opkg`) — `CONTROL/pre-install.sh` checks `jq`, `bash`, and `rsync` independently and installs any missing tools via `opkg`.
-* Building APKs locally requires `jq`, `tar`, and `zip` (`./build.sh` packages the current version without dirtying tracked files; pass `--bump` to increment the revision in `CONTROL/config.json`).
+---
 
-# 🛑 Disclaimer & Responsibility
-Use this software at your own risk.
+## Boot & Shutdown Integration (`S02MountFix` / `K02MountFix`)
 
-This plugin performs low-level system operations on your Asustor NAS, including:
+ADM registers `CONTROL/start-stop.sh` at boot/stop priority `2`:
 
-Moving application data between volumes.
+```text
+Boot (rcS.pluginsfs):
+  S02MountFix  ->  S20download-center  ->  S50minidlna / S50photogallery  ->  S52entware  ->  S65docker-ce
 
-- Modifying system mount points using `mount --bind`.
-- Altering Linux kernel parameters (`sysctl`).
-- By using this tool, you acknowledge that:
+Shutdown (rcK.pluginsfs, reverse order):
+  K80...  ->  K52entware  ->  K35docker-ce  ->  ...  ->  K02MountFix  ->  built-in services (sshd, S21stormand)
+```
 
-Data Safety: You are responsible for your own data. Always maintain a current backup of your critical files and app configurations before using this tool.
+Because `S02MountFix` runs **before** `S52entware` (and `K02MountFix` runs **after** `K52entware` removes `/opt/bin`), the boot/shutdown path is completely **`jq`-free**:
+- `etc/mountfix.conf` (JSON) is the UI source of truth.
+- `etc/mounts.list` (`<src>:<tgt>` per line) is atomically generated on every UI save/mount/unmount and during package upgrade (`CONTROL/post-install.sh`), and read with pure POSIX `sh` at boot/shutdown.
 
-No Warranty: This software is provided "as is", without any warranty. The author is not liable for any data loss, system instability, hardware damage, or service downtime.
+### Runtime Stop/Upgrade vs. Real Reboot/Shutdown
 
-ADM Updates: Future Asustor ADM updates may change how the system handles volumes or apps, which could break this plugin's functionality.
+MountFix distinguishes normal runtime stops from actual system power events via ADM's `/var/log/halt-action`:
 
-Manual Intervention: While the plugin automates the process, it is your responsibility to ensure that the target SSD volume has sufficient space and is healthy.
+- **Normal runtime (AppCentral Stop / Disable / Upgrade):** Attempts a plain, non-lazy `umount`. If an app is still running and holds files open, MountFix **never kills processes and never uses lazy `umount -l`** — it logs a warning with exact `pid(comm)` holders and leaves the mount intact so running services (e.g. Docker containers) continue uninterrupted.
+- **Real system `REBOOT` or `SHUTDOWN`:** Unmounts idle apps in reverse order (~1 s). If lingering processes (such as an SSH `bash`/`tmux` session on `entware`) still hold a mount after the grace window, MountFix sends `SIGTERM` → `SIGKILL` **only to the exact per-path PIDs** found under `/proc` (never `fuser -k -m`) so ADM's `S21stormand` can cleanly unmount `/volume2` and `/volume1`.
 
-# 📜 License
-This project is licensed under the MIT License. This means you are free to use, modify, and distribute the software, provided that the copyright notice and this permission notice are included in all copies.
+---
 
-# Pro-tips for a Safe Experience:
-Stop before you move: Always stop the targeted application in AppCentral before applying a "fix" to ensure data integrity during migration.
+## Features — What MountFix Does (and When)
 
-Monitor Logs: If an app behaves unexpectedly after a move, check the status column and ensure the bind mount is active.
+| Feature | When It Runs | What It Does |
+|---|---|---|
+| **Copy to target** | User clicks **Copy to target** | Runs a detached background `rsync` (`-aH --numeric-ids` + auto-probed `-A`/`-X`/`--outbuf=L`) from `/volume1` to `<target>/AppCentral/<app>`. If the target folder already exists, prompts before running mirror mode (`--delete`). |
+| **Mount** | User clicks **Mount** | Verifies no processes hold the app directory (`pids_using_paths`), executes `mount --bind`, and atomically adds the app to `etc/mountfix.conf` and `etc/mounts.list`. |
+| **Unmount** | User clicks **Unmount** | Prompts for **Unmount & Sync-back** (recommended) or **Unmount only**. Detaches the bind mount and atomically removes the app from `etc/mountfix.conf` and `etc/mounts.list`. |
+| **Sync back** | User clicks **Sync back** (or **Unmount & Sync-back**) | Mirrors `<target>/AppCentral/<app>/` back to `/volume1/.@plugins/AppCentral/<app>/` using `--delete` (after explicit confirmation) so the HDD copy becomes identical to the SSD copy. |
+| **Validation & mismatch warnings** | On window open, volume change, or after per-app actions | Non-blocking single-pass `du -sk` disk usage check + `stat -c %d:%i` mount verification. Flags any `configured != mounted` mismatch in the grid (`Mounted (not in boot)` / `Not mounted (in boot)`). |
+| **Optional `sysctl` tuning** | At boot / `start-stop.sh start` (only if enabled) | Controlled by the **Apply kernel VM/writeback sysctl tuning on boot** checkbox (`enableSysctlTuning`, **off by default**). When enabled, logs previous values and sets `vm.swappiness=1`, `vm.vfs_cache_pressure=10`, `vm.dirty_writeback_centisecs=6000`, `vm.dirty_expire_centisecs=6000`. |
+| **Uninstall guard** | Package uninstall (`CONTROL/pre-uninstall.sh`) | Scans `/proc/mounts` and **blocks uninstall** (`exit 1`) if any AppCentral bind mount is still active, listing the mounted apps. |
+| **Security & logging** | Every CGI request & boot/shutdown | Every CGI verifies a valid ADM **administrator** session (`sid` via `admin.cgi`) and enforces `POST` on mutating endpoints. Boot/shutdown actions log to `var/mountfix.log` (auto-rotated) and emit warnings to ADM System Log. |
 
-Test small: Start by moving a less critical app to verify everything works as expected in your specific environment.
+---
 
-# Description for End Users
+## What MountFix Does NOT Do
 
-MountFix is a tool for ASUSTOR NAS device owners that allows you to move selected AppCentral applications (such as Docker, PhotoGallery, or other heavy applications) from the default Volume 1 to another volume, for example, an additional SSD drive. The goal is to improve system performance, as applications run faster on SSD than on traditional HDD drives.
+- **Does not stop or start applications for you.** You must stop and start applications manually in AppCentral.
+- **Does not auto-sync-back** on shutdown, reboot, MountFix upgrade, or when you disable MountFix.
+- **Does not delete target folders** on the SSD automatically when you unmount an app (reclaiming SSD space is currently a manual step after verifying the app works on `/volume1`).
+- **Does not allow relocating `MountFix` itself** (blocked both in the UI and server-side).
+- **Does not allow selecting HDD volumes** as migration targets.
+- **Does not modify or restore `sysctl` on `stop`/shutdown.**
 
-## How does it work for you?
-1. **Installation**: Install the MountFix package through AppCentral in ADM (Asustor Data Master).
-2. **Configuration**: In the MountFix interface, select the target volume (e.g., /volume2 on SSD) and check the applications you want to move.
-3. **Migration**: The tool will automatically copy the application data to the new volume and configure a "bind mount", which means the system still sees the application in the original location (/volume1/.@plugins/AppCentral/), but the data is physically on the SSD.
-4. **Launch**: After restarting the system, applications will run from the new location, without losing functionality in ADM.
+---
 
-This way, your applications will be faster, and the main volume will be less loaded. Remember to back up your data before migration!
+## User Guide & Rules (What You Can and Cannot Do)
 
-# Mechanism Description for Developers
+### Relocating an Application (HDD → SSD)
+1. Open **AppCentral** and **stop** the target application.
+2. Open **MountFix**, select your SSD/NVMe **Target Volume**, and select the application row.
+3. Click **Copy to target** and wait for `100%` completion.
+4. Click **Mount** (this mounts the app immediately and saves it to boot configuration automatically).
+5. Return to **AppCentral** and **start** the application.
 
-For an in-depth technical breakdown of IPC, background transfer execution, polling mechanisms, and safety guardrails, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+### Moving an Application Back to HDD (SSD → HDD)
+1. Open **AppCentral** and **stop** the application.
+2. Open **MountFix**, select the application, and click **Unmount**.
+3. Choose **Unmount & Sync-back** so the latest SSD data is mirrored back to `/volume1`.
+4. Return to **AppCentral** and **start** the application.
 
-At the current development stage, MountFix uses the ADM plugin architecture to integrate with the NAS system.
+### Important Rules & Awareness
+- **Always stop the app first:** Attempting to copy, mount, unmount, or sync-back a running app is blocked by both the UI and the backend (`pids_using_paths` check) to prevent database or filesystem corruption.
+- **Understand mirror mode (`--delete`):** Both **Sync back** and **Copy to target** (when overwriting an existing target directory) use `rsync --delete`. Files removed on the source side will also be removed on the destination side.
+- **Be careful with `entware`:** `entware` provides `jq`, `bash`, and `rsync` used by MountFix and starts *after* `S02MountFix`. MountFix displays an explicit warning before copying or mounting `entware`.
+- **Disabling MountFix in AppCentral:** Disabling or upgrading MountFix while relocated apps are running will **not** crash or unmount them; they stay mounted on SSD until the next reboot (after which a disabled MountFix will not re-mount them).
+- **Before uninstalling MountFix:** You **must** stop, unmount, and sync-back all relocated apps first. `pre-uninstall.sh` will refuse to uninstall MountFix while any bind mount is active.
+- **Keep backups:** Always maintain independent backups of critical application data (databases, Docker volumes, photos) before relocating or syncing back.
+- **Kernel `sysctl` tuning caveat:** Enabling `enableSysctlTuning` extends kernel dirty writeback timers to 60 seconds system-wide (reducing disk wakeups, but increasing the window of unflushed RAM writes on sudden power loss — recommended only with a UPS).
 
+---
 
-## System Architecture
-- **APKG Package**: Consists of CONTROL/ (metadata, installation scripts), webman/ (web interface), etc/ (configuration).
-- **Language**: Mainly Bash (scripts), JavaScript (UI ExtJS), JSON (configuration).
-- **Dependencies**: Requires entware (opkg) to install bash, jq.
+## Prerequisites & Local Build
 
-## Application Migration & Boot Mechanism
-1. **Configuration**: `etc/mountfix.conf` stores the UI configuration (`targetVolume` and `selectedApps`), while `etc/mounts.list` provides a pre-validated, `jq`-free `SRC:TGT` list for boot/shutdown scripts (kept in sync on config save and package upgrades).
-2. **Application Detection**: `webman/scripts/common.sh` (`get_installed_apps_json()`) parses `/usr/builtin/etc/appcentral/installed.json` to list installed AppCentral packages (excluding `MountFix`). Shared helpers live in `CONTROL/lib.sh`.
-3. **Validation**: `validate.cgi` checks source (`/volume1/.@plugins/AppCentral/APP`) and target (`TARGET/AppCentral/APP`) directory sizes via single-pass batched `du -sk`, verifies active bind mounts via device/inode comparison (`stat -c %d:%i`), and flags any `configured != mounted` mismatch.
-4. **Migration & Sync-Back**: `migrate.cgi` runs non-blocking, detached background `rsync` transfers (`-aH --numeric-ids` plus auto-detected `-A`/`-X`/`--outbuf=L`, with `--delete` mirror mode for sync-back and forced re-copy) protected by an atomic mutex lock, server-side busy-process guard (`pids_using_paths`), and explicit `DONE`/`ERROR` status reporting.
-5. **Mounting & Shutdown**: `mount.cgi` mounts/unmounts applications and atomically updates `etc/mountfix.conf` + `etc/mounts.list`; `CONTROL/start-stop.sh` (`S02MountFix` / `K02MountFix`) binds `TARGET/AppCentral/APP` onto `/volume1/.@plugins/AppCentral/APP` at boot, optionally applies `sysctl` memory/VFS tuning on `start` when `enableSysctlTuning` is enabled in config/UI (default off), and safely unmounts in reverse order on `stop` (skipping busy apps during runtime upgrades and cleaning up lingering holders only on real ADM `REBOOT`/`SHUTDOWN`).
-6. **Observability**: Logs all boot/shutdown operations to `var/mountfix.log` and emits warnings to the ADM System Log (`/usr/sbin/syslog --level 1`).
-7. **UI**: `mountfix.js` (ExtJS) provides target volume selection (SSD/HDD detection) and per-application copy, mount, unmount, and sync-back actions.
+- **On NAS (runtime):** Installed **Entware** (`opkg`). `CONTROL/pre-install.sh` adds Entware to `PATH` and checks `jq`, `bash`, and `rsync` independently, installing any missing tools via `opkg`.
+- **Local development & packaging:** Requires `jq`, `tar`, and `zip`.
+  - `./build.sh` — packages the current version from `CONTROL/config.json` into `./out/` without dirtying tracked files.
+  - `./build.sh --bump` — increments the revision in `CONTROL/config.json` before packaging.
+  - `./tests/run_all.sh` — runs all 8 behavioural and build verification test suites.
 
-## CGI API
-All CGIs require a valid ADM **administrator** session (`sid` query parameter, verified through ADM's `admin.cgi`); otherwise they return `{"success": false, "error": "Unauthorized: ..."}`. Mutating actions (`set`, `mount`, `unmount`, `migrate`, `sync_back`) require `POST`.
+---
 
-- `apps.cgi?act=get` (`GET`): Returns installed applications in JSON (`MountFix` itself is excluded).
-- `config.cgi?act=get` (`GET`): Returns current configuration, apps, volumes, and package version.
-- `config.cgi?act=set` (`POST`): Saves configuration from POST JSON and updates `etc/mounts.list`.
-- `validate.cgi?act=get&target=VOL[&app=NAME]` (`GET`): Returns mount status, boot-config mismatch flags, and disk usage per app.
-- `mount.cgi?act=mount|unmount&app=NAME&target=VOL` (`POST`): Mounts or unmounts an application directory and syncs boot configuration.
-- `migrate.cgi?act=migrate|sync_back` (`POST`) / `act=status` (`GET`): Starts or polls background data migration / sync-back.
+## Developer Reference
 
-## Documentation & Roadmap
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): Internal IPC, transfer flow, and boot/shutdown lifecycle.
-- [docs/TECHNICAL-REVIEW.md](docs/TECHNICAL-REVIEW.md): Full security/reliability audit, Stage 1 production verification (ADM 5.1.5), and Stage 2 roadmap.
-- [IDEAS.md](IDEAS.md): Performance optimization proposals for `validate.cgi`.
+- **APKG Layout:** `CONTROL/` (manifest, lifecycle hooks, `lib.sh`, `start-stop.sh`), `webman/` (POSIX `sh` CGIs, `scripts/common.sh`, ExtJS 4 UI `mf_actions.js` / `mf_core.js` / `mf_main.js` bundled into `mountfix.js`), `etc/` (`mountfix.conf`, generated `mounts.list`).
+- **CGI API:** All endpoints require a valid ADM administrator `sid`; mutating actions require `POST`.
+  - `GET config.cgi?act=get` — returns current config, installed apps (excluding `MountFix`), volumes (SSD/HDD + free space), and package version.
+  - `POST config.cgi?act=set` — validates and saves `{targetVolume, selectedApps, enableSysctlTuning}` and regenerates `etc/mounts.list`.
+  - `GET validate.cgi?act=get&target=VOL[&app=NAME]` — returns per-app mount state, `configured`/`mismatch` flags, and batched `du -sk` sizes.
+  - `POST mount.cgi?act=mount|unmount&app=NAME&target=VOL` — binds/unbinds the app and atomically syncs boot configuration.
+  - `POST migrate.cgi?act=migrate|sync_back&app=NAME&target=VOL[&force=1]` / `GET migrate.cgi?act=status` — starts or polls detached background `rsync` transfers protected by `/tmp/mountfix.lock`.
+- **Additional Documentation:**
+  - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — internal IPC, transfer engine, lock protocol, and boot/shutdown lifecycle.
+  - [docs/TECHNICAL-REVIEW.md](docs/TECHNICAL-REVIEW.md) — full security/reliability audit, ADM 5.1.5 field verification, and Stage 1–2 implementation history.
+  - [IDEAS.md](IDEAS.md) — future roadmap (Safe *Delete target* workflow and optional `validate.cgi` caching).
+
+---
+
+## Disclaimer & License
+
+> **Use this software at your own risk.** MountFix performs low-level bind-mount, file-mirroring (`rsync --delete`), and optional Linux kernel (`sysctl`) operations. It is provided *"as is"*, without warranty of any kind. The author is not liable for any data loss, system instability, service downtime, or hardware damage. Future ASUSTOR ADM updates may alter how AppCentral or volumes operate.
+
+Licensed under the **MIT License**.
