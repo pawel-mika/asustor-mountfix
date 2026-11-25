@@ -27,7 +27,7 @@ sequenceDiagram
     participant Status as File (/tmp/mountfix_transfer.status)
 
     User->>FE: Click "Copy to Target" / "Sync Back"
-    FE->>CGI: POST (migrate) / GET (sync_back) migrate.cgi?act=migrate|sync_back&app=...&target=...
+    FE->>CGI: POST migrate.cgi?act=migrate|sync_back&app=...&target=...
     CGI->>Script: start_app_transfer() or start_app_sync_back()
     
     Script->>Script: Run safety checks (is_app_bind_mounted, ensure_app_not_busy, target_exists)
@@ -58,7 +58,7 @@ sequenceDiagram
     end
 
     FE->>FE: Detect state === "done" (or "error")
-    FE->>FE: clearInterval(), unmaskAll(), call validate()
+    FE->>FE: stopMigrationMonitor(), unmaskAll(), call validate(app)
     FE->>User: Display completion or error status
 ```
 
@@ -127,12 +127,12 @@ When `migrate.cgi?act=status` is invoked, `get_transfer_status_json()` in `webma
 Communication between backend and frontend relies on periodic **HTTP GET polling** rather than WebSockets or Server-Sent Events (SSE) to ensure full compatibility with ADM's lighttpd/CGI environment.
 
 - **Trigger:** Method `page.monitorMigrationStatus(actionLabel, callbackOnComplete)`.
-- **Interval:** Fixed at `500ms` via `setInterval()`.
+- **Interval:** Chained `500ms` `setTimeout()` (prevents overlapping in-flight requests) stopped via `stopMigrationMonitor()` on completion, error, or window `beforeclose`.
 - **UI Feedback:** Applies an ExtJS element mask (`page.win.el.mask()`) showing the live percentage.
 - **Termination Conditions:**
-  - `state === 'error'` or `lastLine` contains `"ERROR"`: Clears interval, unmasks UI, displays error message.
-  - `state === 'done'` (matching the active app): Clears interval, unmasks UI, shows completion status, runs `validate()`, and triggers `callbackOnComplete`. Reaching `100%` while `state === 'running'` does **not** terminate early.
-  - AJAX failure / network error: Clears interval, unmasks UI, alerts the user.
+  - `state === 'error'` or `lastLine` contains `"ERROR"`: Stops polling, unmasks UI, displays error message.
+  - `state === 'done'` (matching the active app): Stops polling, unmasks UI, shows completion status, runs targeted `validate(app)`, and triggers `callbackOnComplete`. Reaching `100%` while `state === 'running'` does **not** terminate early.
+  - AJAX failure / network error: Stops polling, unmasks UI, alerts the user.
 
 ---
 
@@ -193,6 +193,8 @@ ADM enforces a 60-second per-script shutdown timeout (`/etc/script/script_trap.s
 ### 4.5 CGI Security & Response Contract
 
 - ADM's `lighttpd` does **not** authenticate `apps/MountFix/*.cgi`, so every CGI calls `require_adm_session()` first. It runs ADM's own `/usr/webman/portal/apis/admin.cgi` locally with `act=get-nonstop&sid=<sid>` and fails closed unless ADM answers `"success": true` (valid administrator session).
+- Mutating actions (`config.cgi?act=set`, `mount.cgi?act=mount|unmount`, `migrate.cgi?act=migrate|sync_back`) enforce `REQUEST_METHOD=POST` via `require_post_method()`; read-only actions (`act=get`, `act=status`) accept `GET`.
+- `mount_app` and `unmount_app` atomically sync `etc/mountfix.conf` and `etc/mounts.list` (`update_mountfix_app_config`), and `validate.cgi` reports per-app `configured` and `mismatch` (`configured_not_mounted` / `mounted_not_configured`) using batched single-pass `du -sk` + `format_kb_human()`.
 - All responses go through `send_json` / `send_json_error` (`Content-Type: application/json`, escaped strings). Unknown `act` returns `{"success": false, "error": "Invalid action"}`.
 - `save_mountfix_config` accepts only `{targetVolume, selectedApps:[{name}]}` with a valid volume and existing, non-protected packages, and normalizes what it stores.
 - ADM's `AS.ARC.ajax` calls `failure(json)` whenever the top-level `success` is `false`; the UI reads `json.result.target_exists` / `json.result.error` there.

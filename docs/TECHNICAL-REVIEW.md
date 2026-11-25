@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Date** | 2026-11-19 (updated 2026-11-24) |
-| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 implemented & verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branch 1 implemented in `0.0.0.106` (installed on NAS, see §8); Stage 2 Branch 2 implemented in `0.0.0.107` (`fix/transfer-engine`, see §9) |
+| **Date** | 2026-11-19 (updated 2026-11-25) |
+| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 implemented & verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branch 1 implemented in `0.0.0.106` (installed on NAS, see §8); Stage 2 Branch 2 implemented in `0.0.0.107` (`fix/transfer-engine`, see §9); Stage 2 Branch 3 implemented in `0.0.0.108` (`fix/ui-state-and-validation`, see §10) |
 | **Scope** | Whole repository: `CONTROL/`, `webman/` (CGI + shell library + ExtJS UI), `build.sh` / `buildJs.sh`, `tests/`, `etc/` |
-| **Status** | **Stage 1 complete & production-verified** (`F1`, `F2`, `F11` start-only `sysctl`, persistent logging, ADM syslog warnings, shutdown-aware cleanup). **Stage 2 Branch 1 implemented (`0.0.0.106`, installed on NAS):** `F5`, `F6`, `F7`, `F13`, `F14` and the shell items of `F17` (see §8). **Stage 2 Branch 2 implemented (`0.0.0.107`, `fix/transfer-engine`):** `F4`, `F8`, `F12` (see §9). **Remaining:** `F3`, `F9`, `F10`, `F11` (UI option), `F15`, `F16` and the JS items of `F17`. |
+| **Status** | **Stage 1 complete & production-verified** (`F1`, `F2`, `F11` start-only `sysctl`, persistent logging, ADM syslog warnings, shutdown-aware cleanup). **Stage 2 Branch 1 implemented (`0.0.0.106`, installed on NAS):** `F5`, `F6`, `F7`, `F13`, `F14` and shell items of `F17` (see §8). **Stage 2 Branch 2 implemented (`0.0.0.107`, `fix/transfer-engine`):** `F4`, `F8`, `F12` (see §9). **Stage 2 Branch 3 implemented (`0.0.0.108`, `fix/ui-state-and-validation`):** `F3`, `F9`, `F16`, JS items of `F17`, `IDEAS.md` §1, `entware` UI warning, and `POST`-only mutating CGIs (see §10). **Remaining:** `F10`, `F11` (UI option), `F15`, and `CONTROL/common.sh` shim removal (Branch 4). |
 
 ---
 
@@ -323,11 +323,11 @@ The script changes system-wide kernel settings on **every** invocation (includin
 | 2 | **F2** Boot & shutdown without `jq` (`etc/mounts.list` + `post-install.sh` upgrade generation) | ✅ **Done & verified (`0.0.0.103`)** | Verified with stripped `PATH` in `tests/test_stop_safety.sh` and across two real NAS reboots (`< 1 s` mount time). |
 | 3 | **F11** `sysctl` tuning on `start` only | 🟡 **Partial (`0.0.0.103`)** | Moved out of `stop` so shutdown never alters dirty writeback timers; UI toggle / restore on uninstall still optional. |
 | 4 | **F6** Shared POSIX shell library (`CONTROL/lib.sh`) | ✅ **Done (`0.0.0.106`)** | `CONTROL/lib.sh` is sourced by `start-stop.sh`, `post-install.sh` and `webman/scripts/common.sh`. `CONTROL/common.sh` is a temporary shim — **remove in Branch 4**. |
-| 5 | **F3** Runtime mount state = boot config (`mount.cgi` updates config + `mounts.list`, mismatch warning in grid) | ⏳ Pending (Stage 2) | Prevents UI mount without *Apply* from diverging on reboot. |
+| 5 | **F3** Runtime mount state = boot config (`mount.cgi` updates config + `mounts.list`, mismatch warning in grid) | ✅ **Done (`0.0.0.108`)** | `mount_app`/`unmount_app` sync `etc/mountfix.conf` + `etc/mounts.list`; `validate.cgi` & grid flag `configured != mounted`; Boot column is read-only. |
 | 6 | **F4**, **F12** Safe `rsync` flags (`-aHAX`), server-side running check, non-blocking `migrate.cgi` background FD redirection | ✅ **Done (`0.0.0.107`)** | Detached background subshell (`</dev/null >/dev/null 2>&1 &`), unbuffered progress streaming, `detect_rsync_flags` (`-aH --numeric-ids` + probed `-A`/`-X`/`--outbuf=L`), mirror `--delete` with UI confirmations, and `ensure_app_not_busy` across migrate/sync-back/mount/unmount. |
 | 7 | **F13**, **F14**, **F15** NVMe SSD detection & `df -Ph`, self-relocation guard (`MountFix`), `pre-install.sh` `PATH` | 🟡 **Partial** — `F13`, `F14` ✅ done (`0.0.0.106`); `F15` ⏳ pending (Branch 4) | Unblocks NVMe volumes and prevents relocating `MountFix` itself. |
-| 8 | **F5**, **F7**, **F8** Config input validation, unified CGI JSON responses, atomic transfer lock + `DONE` marker | ✅ **Done (`0.0.0.106`–`0.0.0.107`)** | `F5`, `F7` in `0.0.0.106`; `F8` in `0.0.0.107` (atomic `/tmp/mountfix.lock` mutex with stale-lock recovery, `mktemp` error files/FIFOs, explicit `DONE`/`ERROR` state markers). `POST`-only enforcement for mutating CGIs is deferred to Branch 3 (needs `mf_actions.js` changes). |
-| 9 | **F9**, **F10**, **F16**, **F17** UI cleanup, double-`validate()` fix, single-app `du` optimization (`IDEAS.md` §1), `pre-uninstall.sh` mount guard | ⏳ Pending (Stage 2) | UX responsiveness and repository hygiene. |
+| 8 | **F5**, **F7**, **F8** Config input validation, unified CGI JSON responses, atomic transfer lock + `DONE` marker | ✅ **Done (`0.0.0.106`–`0.0.0.108`)** | `F5`, `F7` in `0.0.0.106`; `F8` in `0.0.0.107`; `POST`-only enforcement on mutating CGIs (`require_post_method`) completed in `0.0.0.108`. |
+| 9 | **F9**, **F10**, **F16**, **F17** UI cleanup, double-`validate()` fix, single-app `du` optimization (`IDEAS.md` §1), `pre-uninstall.sh` mount guard | 🟡 **Partial** — `F9`, `F16`, `F17` ✅ done (`0.0.0.108`); `F10` ⏳ pending (Branch 4) | Batched `du -sk`, non-blocking `validate(appName)`, chained `setTimeout` polling, `beforeclose` cleanup, `entware` warning done in `0.0.0.108`. |
 
 ### 4.1 Stage 2 Execution Plan (Agreed Branch & Commit Grouping)
 
@@ -342,7 +342,7 @@ To avoid merge conflicts in `webman/scripts/common.sh` and `webman/mf_actions.js
    - **Commit 1 (`F12` + `F8`):** Redirect background subshell FDs (`</dev/null >/dev/null 2>&1`) so `migrate.cgi` returns immediately, avoid block-buffered `tr` progress stalls, add atomic `/tmp/mountfix.lock` mutex, replace fixed `/tmp` filenames with `mktemp`, and emit explicit `DONE`/`ERROR` status markers after `wait`.
    - **Commit 2 (`F4`):** Switch transfers to `rsync -aHAX --numeric-ids` (after verifying `-A`/`-X` support on the target NAS), unify destination path handling before enabling optional `--delete` mirror mode, and enforce a server-side `pids_using_paths` check rejecting transfers/mounts/unmounts while processes hold the app directory.
 
-3. **Branch 3: `fix/ui-state-and-validation`** *(UI ↔ boot config consistency, responsiveness & JS cleanup)*
+3. **Branch 3: `fix/ui-state-and-validation`** ✅ **Done (`0.0.0.108`, see §10)** *(UI ↔ boot config consistency, responsiveness & JS cleanup)*
    - **Commit 1 (`F3`):** Update `mount.cgi` so *Mount*/*Unmount* atomically updates `etc/mountfix.conf` and `etc/mounts.list` without requiring a separate *Apply* step, and expose `configured != mounted` mismatch warnings in `validate.cgi` and the ExtJS grid.
    - **Commit 2 (`F16` + `IDEAS.md` §1):** Suppress duplicate `validate()` firing on initial window open, stop running `validate()` concurrently with *Unmount & Sync-back*, pass single-app `validate(appName)` after per-app actions, and consolidate `du -sh` + `du -sk` into a single `du -sk` pass without full-window modal blocking.
    - **Commit 3 (`F9` + JS items from `F17`):** Move `maskStack` from prototype to instance, replace uncleaned `setInterval` polling with `beforeclose`-safe `setTimeout` chaining, remove dead `getApps()`/`apps.cgi` calls and debug leftovers (`window.qq`, `console.log`), drop unused POST body in `migrateSelectedApp`, and fix the `taskIcon` path typo.
@@ -587,6 +587,22 @@ Implemented as 2 atomic commits plus a version bump, verified locally with expan
 
 ### 9.2 Open items carried forward
 
-- **Pending live NAS verification (`0.0.0.107`):** Build `.apk` and verify on ADM 5.1.5 that Entware `rsync` capability probing (`-A`/`-X`/`--outbuf=L`), non-blocking progress polling, and mirror-mode confirmations behave as expected on real volumes.
-- **Branch 3 (`fix/ui-state-and-validation`):** `F3`, `F9`, `F16`, JS items of `F17`, `IDEAS.md` §1, `entware` relocation warning, and `POST`-only mutating CGIs.
+- **Pending live NAS verification (`0.0.0.107`+):** Build `.apk` and verify on ADM 5.1.5 that Entware `rsync` capability probing (`-A`/`-X`/`--outbuf=L`), non-blocking progress polling, and mirror-mode confirmations behave as expected on real volumes.
+- **Branch 4 (`chore/lifecycle-and-repo-hygiene`):** `F15`, `F10`, `F11` (UI option), and removal of the `CONTROL/common.sh` shim.
+
+---
+
+## 10. Stage 2 — Branch 3 Results (`fix/ui-state-and-validation`, `0.0.0.108`)
+
+Implemented as 3 atomic commits plus version bump and documentation sync, verified locally with expanded backend and Node UI test suites (`tests/test_lib_and_cgi.sh` tests 1–15, `tests/test_ui_build.sh` tests 1–17).
+
+| Commit | Findings | Summary |
+|---|---|---|
+| `9735d3d` | `F3` | Added `update_mountfix_app_config()` and `get_configured_apps_for_volume()` in `webman/scripts/common.sh`; `mount_app` / `unmount_app` now atomically sync `etc/mountfix.conf` and `etc/mounts.list` (`configUpdated` in response); `validate.cgi` emits per-app `configured` and `mismatch` (`configured_not_mounted` / `mounted_not_configured`); ExtJS grid shows mismatch warnings and makes the `Boot` checkcolumn read-only. |
+| `48216ad` | `F16`, `IDEAS.md` §1 | Replaced dual `du -sh` + `du -sk` with batched single-pass `du -sk` and pure `awk` `format_kb_human()`; suspended combo events in `setMfConfig()` to stop double `validate()` on open; made `validate(appName)` non-blocking and targeted for per-app actions; removed the parallel `validate()` race during *Unmount & Sync-back*. |
+| `81a44c1` | `F9`, `F17` (JS), `F5` (`POST`), `entware` warning | Moved `maskStack` to instance constructor; replaced `setInterval` with `beforeclose`-safe chained `setTimeout` (`stopMigrationMonitor`); removed dead `getApps()`, `requestConfig()`, `appsApiUrl`, `window.qq`, `console.log`, and unused `getMfConfig()` body on `migrate`; fixed `taskIcon` path typo (`../apps/...`); added `confirmEntwareAction()` warning for `entware` copy/mount; enforced `require_post_method()` on all mutating CGIs (`config.cgi?act=set`, `mount.cgi`, `migrate.cgi?act=migrate|sync_back`). |
+
+### 10.1 Open items carried forward
+
+- **Pending live NAS verification (`0.0.0.108`):** Build `.apk` and verify the full authenticated UI flow on ADM 5.1.5 (single-pass `validate.cgi`, `POST` mutating CGIs, `Mount`/`Unmount` auto-updating `mounts.list`, mismatch warning rendering, and `entware` confirmation dialog).
 - **Branch 4 (`chore/lifecycle-and-repo-hygiene`):** `F15`, `F10`, `F11` (UI option), and removal of the `CONTROL/common.sh` shim.

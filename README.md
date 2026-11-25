@@ -72,21 +72,21 @@ At the current development stage, MountFix uses the ADM plugin architecture to i
 ## Application Migration & Boot Mechanism
 1. **Configuration**: `etc/mountfix.conf` stores the UI configuration (`targetVolume` and `selectedApps`), while `etc/mounts.list` provides a pre-validated, `jq`-free `SRC:TGT` list for boot/shutdown scripts (kept in sync on config save and package upgrades).
 2. **Application Detection**: `webman/scripts/common.sh` (`get_installed_apps_json()`) parses `/usr/builtin/etc/appcentral/installed.json` to list installed AppCentral packages (excluding `MountFix`). Shared helpers live in `CONTROL/lib.sh`.
-3. **Validation**: `validate.cgi` checks source (`/volume1/.@plugins/AppCentral/APP`) and target (`TARGET/AppCentral/APP`) directory sizes and verifies active bind mounts via device/inode comparison (`stat -c %d:%i`).
+3. **Validation**: `validate.cgi` checks source (`/volume1/.@plugins/AppCentral/APP`) and target (`TARGET/AppCentral/APP`) directory sizes via single-pass batched `du -sk`, verifies active bind mounts via device/inode comparison (`stat -c %d:%i`), and flags any `configured != mounted` mismatch.
 4. **Migration & Sync-Back**: `migrate.cgi` runs non-blocking, detached background `rsync` transfers (`-aH --numeric-ids` plus auto-detected `-A`/`-X`/`--outbuf=L`, with `--delete` mirror mode for sync-back and forced re-copy) protected by an atomic mutex lock, server-side busy-process guard (`pids_using_paths`), and explicit `DONE`/`ERROR` status reporting.
-5. **Mounting & Shutdown**: `CONTROL/start-stop.sh` (`S02MountFix` / `K02MountFix`) binds `TARGET/AppCentral/APP` onto `/volume1/.@plugins/AppCentral/APP` at boot, applies `sysctl` memory/VFS tuning on `start`, and safely unmounts in reverse order on `stop` (skipping busy apps during runtime upgrades and cleaning up lingering holders only on real ADM `REBOOT`/`SHUTDOWN`).
+5. **Mounting & Shutdown**: `mount.cgi` mounts/unmounts applications and atomically updates `etc/mountfix.conf` + `etc/mounts.list`; `CONTROL/start-stop.sh` (`S02MountFix` / `K02MountFix`) binds `TARGET/AppCentral/APP` onto `/volume1/.@plugins/AppCentral/APP` at boot, applies `sysctl` memory/VFS tuning on `start`, and safely unmounts in reverse order on `stop` (skipping busy apps during runtime upgrades and cleaning up lingering holders only on real ADM `REBOOT`/`SHUTDOWN`).
 6. **Observability**: Logs all boot/shutdown operations to `var/mountfix.log` and emits warnings to the ADM System Log (`/usr/sbin/syslog --level 1`).
 7. **UI**: `mountfix.js` (ExtJS) provides target volume selection (SSD/HDD detection) and per-application copy, mount, unmount, and sync-back actions.
 
 ## CGI API
-All CGIs require a valid ADM **administrator** session (`sid` query parameter, verified through ADM's `admin.cgi`); otherwise they return `{"success": false, "error": "Unauthorized: ..."}`.
+All CGIs require a valid ADM **administrator** session (`sid` query parameter, verified through ADM's `admin.cgi`); otherwise they return `{"success": false, "error": "Unauthorized: ..."}`. Mutating actions (`set`, `mount`, `unmount`, `migrate`, `sync_back`) require `POST`.
 
-- `apps.cgi?act=get`: Returns installed applications in JSON (`MountFix` itself is excluded).
-- `config.cgi?act=get`: Returns current configuration, apps, volumes, and package version.
-- `config.cgi?act=set`: Saves configuration from POST JSON and updates `etc/mounts.list`.
-- `validate.cgi?act=get&target=VOL[&app=NAME]`: Returns mount status and disk usage per app.
-- `mount.cgi?act=mount|unmount&app=NAME&target=VOL`: Mounts or unmounts an application directory.
-- `migrate.cgi?act=migrate|sync_back|status`: Starts or polls background data migration / sync-back.
+- `apps.cgi?act=get` (`GET`): Returns installed applications in JSON (`MountFix` itself is excluded).
+- `config.cgi?act=get` (`GET`): Returns current configuration, apps, volumes, and package version.
+- `config.cgi?act=set` (`POST`): Saves configuration from POST JSON and updates `etc/mounts.list`.
+- `validate.cgi?act=get&target=VOL[&app=NAME]` (`GET`): Returns mount status, boot-config mismatch flags, and disk usage per app.
+- `mount.cgi?act=mount|unmount&app=NAME&target=VOL` (`POST`): Mounts or unmounts an application directory and syncs boot configuration.
+- `migrate.cgi?act=migrate|sync_back` (`POST`) / `act=status` (`GET`): Starts or polls background data migration / sync-back.
 
 ## Documentation & Roadmap
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): Internal IPC, transfer flow, and boot/shutdown lifecycle.
