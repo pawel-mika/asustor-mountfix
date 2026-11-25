@@ -16,7 +16,6 @@ fail() {
 echo "Test 1: POSIX sh -n syntax, shebang, and executable mode checks..."
 for script in \
     "$REPO_ROOT/CONTROL/lib.sh" \
-    "$REPO_ROOT/CONTROL/common.sh" \
     "$REPO_ROOT/CONTROL/start-stop.sh" \
     "$REPO_ROOT/CONTROL/post-install.sh" \
     "$REPO_ROOT/webman/scripts/common.sh"
@@ -297,7 +296,7 @@ fi
 )
 
 ls "$SAVE_ETC"/mountfix.conf.bak_* >/dev/null 2>&1 || fail "Expected backup after valid save_mountfix_config"
-jq -e '. == {"targetVolume":"/volume2","selectedApps":[{"name":"docker-ce"},{"name":"entware","enabled":false}]}' "$SAVE_ETC/mountfix.conf" >/dev/null || \
+jq -e '. == {"targetVolume":"/volume2","selectedApps":[{"name":"docker-ce"},{"name":"entware","enabled":false}],"enableSysctlTuning":false}' "$SAVE_ETC/mountfix.conf" >/dev/null || \
     fail "Normalized mountfix.conf mismatch: $(cat "$SAVE_ETC/mountfix.conf")"
 grep -qxF "/volume2/AppCentral/docker-ce:$SAVE_VOL1/.@plugins/AppCentral/docker-ce" "$SAVE_ETC/mounts.list" || \
     fail "mounts.list mismatch after save_mountfix_config: $(cat "$SAVE_ETC/mounts.list")"
@@ -563,7 +562,7 @@ CFG_POST_RAW=$(
 CFG_POST_BODY=$(assert_cgi_json "$CFG_POST_RAW" "config.cgi POST set stdin preservation")
 jq -e '.success == true and .msg == "Settings saved"' >/dev/null <<<"$CFG_POST_BODY" || \
     fail "config.cgi POST set failed (stdin consumed or env leaked into require_adm_session): $CFG_POST_BODY"
-jq -e '. == {"targetVolume":"/volume2","selectedApps":[{"name":"docker-ce"},{"name":"entware","enabled":false}]}' "$CGI_ETC/mountfix.conf" >/dev/null || \
+jq -e '. == {"targetVolume":"/volume2","selectedApps":[{"name":"docker-ce"},{"name":"entware","enabled":false}],"enableSysctlTuning":false}' "$CGI_ETC/mountfix.conf" >/dev/null || \
     fail "config.cgi POST set did not persist full POST body: $(cat "$CGI_ETC/mountfix.conf")"
 
 # ---------------------------------------------------------------------------

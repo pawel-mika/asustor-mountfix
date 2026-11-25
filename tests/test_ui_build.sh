@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -e
 
-# Run JS build
-./buildJs.sh
+# Build JS into a temp dir and verify tracked webman/mountfix.js is in sync (without dirtying repo)
+TMP_JS_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_JS_DIR"' EXIT
+cp -r webman "$TMP_JS_DIR/"
+./buildJs.sh "$TMP_JS_DIR" false >/dev/null
+diff -u webman/mountfix.js "$TMP_JS_DIR/webman/mountfix.js" || {
+    echo "FAIL: webman/mountfix.js is out of sync with mf_*.js sources — run ./buildJs.sh"; exit 1
+}
 
 # Check if mountfix.js contains syncBackSelectedApp
 grep -q "syncBackSelectedApp" webman/mountfix.js || { echo "FAIL: syncBackSelectedApp missing from mountfix.js"; exit 1; }

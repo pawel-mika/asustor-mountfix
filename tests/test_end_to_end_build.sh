@@ -9,6 +9,10 @@ set -e
 # Verify obsolete files are removed
 [ ! -f "webman/setup.cgi" ] || { echo "FAIL: webman/setup.cgi should be removed"; exit 1; }
 [ ! -f "webman/progress.cgi" ] || { echo "FAIL: webman/progress.cgi should be removed"; exit 1; }
+[ ! -f "CONTROL/common.sh" ] || { echo "FAIL: CONTROL/common.sh shim should be removed"; exit 1; }
+[ ! -f "toolchain/apkg-tools_py3.py" ] || { echo "FAIL: unused toolchain/apkg-tools_py3.py should be removed"; exit 1; }
+
+command -v zip >/dev/null 2>&1 || { echo "FAIL: 'zip' is required to package APKs (install zip first)"; exit 1; }
 
 # Test packaging tool directly (pure shell, no python)
 TMP_PKG_DIR=$(mktemp -d)

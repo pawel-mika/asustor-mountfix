@@ -4,6 +4,22 @@ source ./buildJs.sh
 
 set -e # stop on error
 
+BUMP_VERSION="${BUMP_VERSION:-0}"
+for arg in "$@"; do
+    case "$arg" in
+        --bump) BUMP_VERSION=1 ;;
+        -h|--help)
+            echo "Usage: $0 [--bump]"
+            echo "  --bump   Increment the revision in CONTROL/config.json before packaging."
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $arg" >&2
+            exit 1
+            ;;
+    esac
+done
+
 OUT_FOLDER="${OUT_FOLDER:-./out}"
 
 if [ ! -d "$OUT_FOLDER" ]; then
@@ -22,48 +38,19 @@ if [ -d "$OUT_FOLDER" ] && [ ! -w "$OUT_FOLDER" ]; then
     fi
 fi
 
-# 0. Update version in CONTROL/config.json
-
+# 0. Optionally bump version in CONTROL/config.json (default: do not dirty tracked files)
 CONFIG_FILE="./CONTROL/config.json"
 
-if [ -f "$CONFIG_FILE" ]; then
-    # get actual
+if [ -f "$CONFIG_FILE" ] && [ "$BUMP_VERSION" = "1" ]; then
     VERSION=$(jq -r '.general.version' "$CONFIG_FILE")
-
-    # get parts of version
     IFS='.' read -r MAJOR MINOR BUILD REVISION <<< "$VERSION"
     REVISION=$((REVISION + 1))
-
-    # build new version
     NEW_VERSION="$MAJOR.$MINOR.$BUILD.$REVISION"
     echo "Bump version: $VERSION -> $NEW_VERSION"
-
-    # write back new version to config
     jq ".general.version = \"$NEW_VERSION\"" "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
-
-    # update version in webman/mf_core.js and sync local mountfix.js
-    if [ -f "webman/mf_core.js" ]; then
-        awk -v ver="$NEW_VERSION" '
-            /fieldLabel:[[:space:]]*'\''Version'\''/ && /value:[[:space:]]*'\''[^'\'']*'\''/ {
-                sub(/value:[[:space:]]*'\''[^'\'']*'\''/, "value: '\''" ver "'\''")
-                print
-                next
-            }
-            /fieldLabel:[[:space:]]*'\''Version'\''/ || /itemId:[[:space:]]*'\''displayVersion'\''/ {
-                in_ver=1
-                print
-                next
-            }
-            in_ver && /value:[[:space:]]*'\''[^'\'']*'\''/ {
-                sub(/value:[[:space:]]*'\''[^'\'']*'\''/, "value: '\''" ver "'\''")
-                in_ver=0
-            }
-            { print }
-        ' "webman/mf_core.js" > "webman/mf_core.js.tmp" && mv "webman/mf_core.js.tmp" "webman/mf_core.js"
-        build_js . false >/dev/null 2>&1
-    fi
-else
-    echo "File not found: $CONFIG_FILE"
+elif [ ! -f "$CONFIG_FILE" ]; then
+    echo "File not found: $CONFIG_FILE" >&2
+    exit 1
 fi
 
 # 1. Create temp folder
@@ -71,7 +58,7 @@ TEMP_FOLDER=$(mktemp -d)
 trap 'rm -rf "$TEMP_FOLDER"' EXIT
 echo "Temp folder created: $TEMP_FOLDER"
 
-# 2. Copy required
+# 2. Copy required files
 cp -r CONTROL "$TEMP_FOLDER/"
 rm -f "$TEMP_FOLDER"/CONTROL/*.old
 cp -r webman "$TEMP_FOLDER/"
@@ -83,7 +70,7 @@ if [ ! -d "$OUT_FOLDER" ]; then
     mkdir -p "$OUT_FOLDER"
 fi
 
-# --- 2.2. Concatenate JS files ---
+# 2.2. Concatenate JS files inside temp package dir only
 build_js "$TEMP_FOLDER" true
 
 # 3. Pack app (pure shell, zero Python)

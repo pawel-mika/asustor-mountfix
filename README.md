@@ -12,9 +12,10 @@ Boot-safe: Installs an ADM init script (`S02MountFix` / `K02MountFix`) that esta
 
 Smart Cleanup: Fast non-lazy unmounting with per-path `/proc` holder detection, persistent logging (`var/mountfix.log`), and shutdown-aware cleanup so ADM `stormand` always unmounts volumes cleanly.
 
-# Prerequisities (TBD)
+# Prerequisites
 
-* Installed entware(opkg) - MountFix will install required commands/packages (bash, jq) during install
+* Installed Entware (`opkg`) — `CONTROL/pre-install.sh` checks `jq`, `bash`, and `rsync` independently and installs any missing tools via `opkg`.
+* Building APKs locally requires `jq`, `tar`, and `zip` (`./build.sh` packages the current version without dirtying tracked files; pass `--bump` to increment the revision in `CONTROL/config.json`).
 
 # 🛑 Disclaimer & Responsibility
 Use this software at your own risk.
@@ -74,7 +75,7 @@ At the current development stage, MountFix uses the ADM plugin architecture to i
 2. **Application Detection**: `webman/scripts/common.sh` (`get_installed_apps_json()`) parses `/usr/builtin/etc/appcentral/installed.json` to list installed AppCentral packages (excluding `MountFix`). Shared helpers live in `CONTROL/lib.sh`.
 3. **Validation**: `validate.cgi` checks source (`/volume1/.@plugins/AppCentral/APP`) and target (`TARGET/AppCentral/APP`) directory sizes via single-pass batched `du -sk`, verifies active bind mounts via device/inode comparison (`stat -c %d:%i`), and flags any `configured != mounted` mismatch.
 4. **Migration & Sync-Back**: `migrate.cgi` runs non-blocking, detached background `rsync` transfers (`-aH --numeric-ids` plus auto-detected `-A`/`-X`/`--outbuf=L`, with `--delete` mirror mode for sync-back and forced re-copy) protected by an atomic mutex lock, server-side busy-process guard (`pids_using_paths`), and explicit `DONE`/`ERROR` status reporting.
-5. **Mounting & Shutdown**: `mount.cgi` mounts/unmounts applications and atomically updates `etc/mountfix.conf` + `etc/mounts.list`; `CONTROL/start-stop.sh` (`S02MountFix` / `K02MountFix`) binds `TARGET/AppCentral/APP` onto `/volume1/.@plugins/AppCentral/APP` at boot, applies `sysctl` memory/VFS tuning on `start`, and safely unmounts in reverse order on `stop` (skipping busy apps during runtime upgrades and cleaning up lingering holders only on real ADM `REBOOT`/`SHUTDOWN`).
+5. **Mounting & Shutdown**: `mount.cgi` mounts/unmounts applications and atomically updates `etc/mountfix.conf` + `etc/mounts.list`; `CONTROL/start-stop.sh` (`S02MountFix` / `K02MountFix`) binds `TARGET/AppCentral/APP` onto `/volume1/.@plugins/AppCentral/APP` at boot, optionally applies `sysctl` memory/VFS tuning on `start` when `enableSysctlTuning` is enabled in config/UI (default off), and safely unmounts in reverse order on `stop` (skipping busy apps during runtime upgrades and cleaning up lingering holders only on real ADM `REBOOT`/`SHUTDOWN`).
 6. **Observability**: Logs all boot/shutdown operations to `var/mountfix.log` and emits warnings to the ADM System Log (`/usr/sbin/syslog --level 1`).
 7. **UI**: `mountfix.js` (ExtJS) provides target volume selection (SSD/HDD detection) and per-application copy, mount, unmount, and sync-back actions.
 

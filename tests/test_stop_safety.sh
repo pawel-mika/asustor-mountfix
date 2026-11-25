@@ -12,7 +12,6 @@ echo "Test 1: Static safety checks on CONTROL/start-stop.sh..."
 [ -f "$REPO_ROOT/CONTROL/start-stop.sh.old" ] || { echo "FAIL: CONTROL/start-stop.sh.old backup missing"; exit 1; }
 sh -n "$REPO_ROOT/CONTROL/start-stop.sh"
 sh -n "$REPO_ROOT/CONTROL/lib.sh"
-sh -n "$REPO_ROOT/CONTROL/common.sh"
 sh -n "$REPO_ROOT/CONTROL/post-install.sh"
 
 if grep -qE '\bfuser\b|umount[[:space:]]+-l' "$REPO_ROOT/CONTROL/start-stop.sh"; then
@@ -145,10 +144,12 @@ ${TMP_DIR}/vol2/AppCentral/missing:${TMP_DIR}/vol1/.@plugins/AppCentral/missing
 EOF
 
 MF_LOG="$TMP_DIR/mountfix.log"
+SYSCTL_CONF="$TMP_DIR/sysctl_on.conf"
+printf '{"targetVolume":"/volume2","selectedApps":[],"enableSysctlTuning":true}\n' > "$SYSCTL_CONF"
 PATH="$MOCK_BIN" \
     MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
     MOUNTS_LIST_FILE="$TEST_LIST" \
-    CONFIG_FILE="$TMP_DIR/nonexistent.conf" \
+    CONFIG_FILE="$SYSCTL_CONF" \
     MOUNTFIX_LOG_FILE="$MF_LOG" \
     ADM_SYSLOG_BIN="$MOCK_BIN/adm_syslog" \
     "$MOCK_BIN/sh" "$REPO_ROOT/CONTROL/start-stop.sh" start >/dev/null 2>&1

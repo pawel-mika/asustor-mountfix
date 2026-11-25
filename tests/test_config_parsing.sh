@@ -56,11 +56,9 @@ if [ "$RESULT_B" != "$EXPECTED_B" ]; then
     exit 1
 fi
 
-# Test 3: Verify CONTROL/common.sh compatibility shim also loads get_mount_configs cleanly
-RESULT_SHIM=$(sh -c '. ./CONTROL/common.sh && CONFIG_FILE="$1" get_mount_configs' _ "$TEST_CONF")
-if [ "$RESULT_SHIM" != "$EXPECTED_B" ]; then
-    echo "FAIL: CONTROL/common.sh compatibility shim failed. Got:"
-    echo "$RESULT_SHIM"
+# Test 3: Verify temporary CONTROL/common.sh shim has been removed
+if [ -e "CONTROL/common.sh" ]; then
+    echo "FAIL: temporary CONTROL/common.sh shim should be removed"
     exit 1
 fi
 

@@ -147,13 +147,13 @@ EOF
 chmod 755 "$MOCK_RSYNC"
 export RSYNC_BIN="$MOCK_RSYNC"
 
-t_start_ms=$(date +%s%3N)
+t_start=$(date +%s)
 RESP=$(start_app_transfer "/volume2" "testapp" "1")
-t_end_ms=$(date +%s%3N)
-elapsed_ms=$((t_end_ms - t_start_ms))
+t_end=$(date +%s)
+elapsed_s=$((t_end - t_start))
 
 printf '%s\n' "$RESP" | jq -e '.success == true' >/dev/null || fail "Slow mock start_app_transfer failed: $RESP"
-[ "$elapsed_ms" -lt 1000 ] || fail "start_app_transfer blocked for ${elapsed_ms}ms (expected < 1000ms)"
+[ "$elapsed_s" -lt 2 ] || fail "start_app_transfer blocked for ${elapsed_s}s (expected < 2s)"
 
 sleep 0.3
 MID_STATUS=$(get_transfer_status_json)
@@ -184,7 +184,7 @@ printf 'Content-Type: application/json\r\n\r\n{ "success": true, "nonstop": "non
 EOF
 chmod 755 "$MOCK_AUTH"
 
-t_cgi_start=$(date +%s%3N)
+t_cgi_start=$(date +%s)
 CGI_RAW=$(
     REQUEST_METHOD=POST \
     QUERY_STRING="sid=valid_sid&act=migrate&target=/volume2&app=testapp&force=1" \
@@ -193,9 +193,9 @@ CGI_RAW=$(
     MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
     sh "$REPO_ROOT/webman/migrate.cgi"
 )
-t_cgi_end=$(date +%s%3N)
+t_cgi_end=$(date +%s)
 cgi_elapsed=$((t_cgi_end - t_cgi_start))
-[ "$cgi_elapsed" -lt 1000 ] || fail "migrate.cgi blocked for ${cgi_elapsed}ms (expected < 1000ms)"
+[ "$cgi_elapsed" -lt 2 ] || fail "migrate.cgi blocked for ${cgi_elapsed}s (expected < 2s)"
 
 CGI_BODY=$(printf '%s' "$CGI_RAW" | awk 'BEGIN{RS="\r\n\r\n"} NR==2{print; exit}')
 printf '%s\n' "$CGI_BODY" | jq -e '.success == true and .result.success == true' >/dev/null || \
@@ -240,7 +240,23 @@ printf '%s\n' "$SYNC_ERR_STATUS" | jq -e '.state == "error" and (.lastLine | con
     fail "Expected ERROR status for exit 23 sync_back, got: $SYNC_ERR_STATUS"
 
 # Test 8: detect_rsync_flags capability detection & fallback (F4)
-export RSYNC_BIN="rsync"
+if rsync --help 2>&1 | grep -q -- '--info='; then
+    export RSYNC_BIN="rsync"
+else
+    # macOS openrsync lacks --info=progress2; strip it so real mirror/hardlink/--delete tests still run
+    REAL_RSYNC_SHIM="$TMP_DIR/real_rsync_shim.sh"
+    cat > "$REAL_RSYNC_SHIM" <<'EOF'
+#!/usr/bin/env bash
+filtered=()
+for a in "$@"; do
+    [[ "$a" == --info=* ]] && continue
+    filtered+=("$a")
+done
+exec rsync "${filtered[@]}"
+EOF
+    chmod 755 "$REAL_RSYNC_SHIM"
+    export RSYNC_BIN="$REAL_RSYNC_SHIM"
+fi
 REAL_FLAGS=$(detect_rsync_flags "$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL/testapp" "$TMP_DIR/volume2/AppCentral/testapp")
 case " $REAL_FLAGS " in
     *" -aH "*|*" --numeric-ids "*) ;;
@@ -292,11 +308,13 @@ printf 'authoritative-src\n' > "$REAL_APP_SRC/orig.txt"
 ln "$REAL_APP_SRC/orig.txt" "$REAL_APP_SRC/hardlink.txt"
 
 # Target has a newer mtime file (would have been skipped by -u) and an extra stale file (must be deleted by --delete)
-printf 'newer-stale-tgt\n' > "$REAL_APP_SRC/../realapp_tmp_newer"
 printf 'newer-stale-tgt\n' > "$REAL_APP_TGT/orig.txt"
-touch -d '+1 hour' "$REAL_APP_TGT/orig.txt"
-rm -f "$REAL_APP_SRC/../realapp_tmp_newer"
+touch -t 203501010000 "$REAL_APP_TGT/orig.txt"
 printf 'extra-on-ssd\n' > "$REAL_APP_TGT/stale_ssd.txt"
+
+get_inode() {
+    stat -c %i "$1" 2>/dev/null || stat -f %i "$1"
+}
 
 XATTR_SUPPORTED=0
 if command -v setfattr >/dev/null 2>&1 && command -v getfattr >/dev/null 2>&1; then
@@ -305,7 +323,23 @@ if command -v setfattr >/dev/null 2>&1 && command -v getfattr >/dev/null 2>&1; t
     fi
 fi
 
-export RSYNC_BIN="rsync"
+if rsync --help 2>&1 | grep -q -- '--info='; then
+    export RSYNC_BIN="rsync"
+else
+    # macOS openrsync lacks --info=progress2; strip it so real mirror/hardlink/--delete tests still run
+    REAL_RSYNC_SHIM="$TMP_DIR/real_rsync_shim.sh"
+    cat > "$REAL_RSYNC_SHIM" <<'EOF'
+#!/usr/bin/env bash
+filtered=()
+for a in "$@"; do
+    [[ "$a" == --info=* ]] && continue
+    filtered+=("$a")
+done
+exec rsync "${filtered[@]}"
+EOF
+    chmod 755 "$REAL_RSYNC_SHIM"
+    export RSYNC_BIN="$REAL_RSYNC_SHIM"
+fi
 REAL_XFER_RES=$(start_app_transfer "/volume2" "realapp" "1")
 printf '%s\n' "$REAL_XFER_RES" | jq -e --arg tgt "$REAL_APP_TGT" '.success == true and .tgt == $tgt' >/dev/null || \
     fail "Real rsync start_app_transfer returned unexpected JSON: $REAL_XFER_RES"
@@ -314,7 +348,7 @@ printf '%s\n' "$REAL_XFER_DONE" | jq -e '.state == "done"' >/dev/null || fail "R
 
 [ "$(cat "$REAL_APP_TGT/orig.txt")" = "authoritative-src" ] || fail "Mirror migrate must overwrite newer-mtime target file"
 [ ! -e "$REAL_APP_TGT/stale_ssd.txt" ] || fail "Mirror migrate with force=1 must delete stale_ssd.txt"
-[ "$(stat -c %i "$REAL_APP_TGT/orig.txt")" = "$(stat -c %i "$REAL_APP_TGT/hardlink.txt")" ] || \
+[ "$(get_inode "$REAL_APP_TGT/orig.txt")" = "$(get_inode "$REAL_APP_TGT/hardlink.txt")" ] || \
     fail "Hardlink inode mismatch after migrate"
 [ "$(cat "$SIBLING_SSD/keep.txt")" = "keep-ssd" ] || fail "Sibling SSD app was modified during migrate!"
 if [ "$XATTR_SUPPORTED" -eq 1 ]; then
@@ -337,7 +371,7 @@ printf '%s\n' "$REAL_SYNC_DONE" | jq -e '.state == "done"' >/dev/null || fail "R
 
 [ ! -e "$REAL_APP_SRC/hardlink.txt" ] || fail "sync_back mirror mode must delete file removed on SSD"
 [ "$(cat "$REAL_APP_SRC/ssd_new.txt")" = "from-ssd" ] || fail "sync_back did not copy new file from SSD"
-[ "$(stat -c %i "$REAL_APP_SRC/ssd_new.txt")" = "$(stat -c %i "$REAL_APP_SRC/ssd_link.txt")" ] || \
+[ "$(get_inode "$REAL_APP_SRC/ssd_new.txt")" = "$(get_inode "$REAL_APP_SRC/ssd_link.txt")" ] || \
     fail "Hardlink inode mismatch after sync_back"
 [ "$(cat "$SIBLING_HDD/keep.txt")" = "keep-hdd" ] || fail "Sibling HDD app was modified during sync_back!"
 if [ "$XATTR_SUPPORTED" -eq 1 ]; then
@@ -346,14 +380,22 @@ if [ "$XATTR_SUPPORTED" -eq 1 ]; then
 fi
 
 # Test 10: Server-side pids_using_paths guard blocks mount, unmount, transfer, and sync_back (F4)
-export PROC_ROOT="/proc"
 BUSY_SRC="$DIR_VOL1/$DIR_PLUGINS/$DIR_APP_CENTRAL/busyapp"
 BUSY_TGT="$TMP_DIR/volume2/AppCentral/busyapp"
 mkdir -p "$BUSY_SRC" "$BUSY_TGT"
-( cd "$BUSY_SRC" && exec sleep 30 ) &
-BUSY_PID=$!
-PIDS_TO_CLEAN+=("$BUSY_PID")
-sleep 0.2
+if [ -d /proc/$$ ]; then
+    export PROC_ROOT="/proc"
+    ( cd "$BUSY_SRC" && exec sleep 30 ) &
+    BUSY_PID=$!
+    PIDS_TO_CLEAN+=("$BUSY_PID")
+    sleep 0.2
+else
+    FAKE_PROC_BUSY="$TMP_DIR/fake_proc_busy"
+    BUSY_PID=99991
+    mkdir -p "$FAKE_PROC_BUSY/$BUSY_PID/fd"
+    ln -s "$BUSY_SRC" "$FAKE_PROC_BUSY/$BUSY_PID/cwd"
+    export PROC_ROOT="$FAKE_PROC_BUSY"
+fi
 
 for op_res in \
     "$(start_app_transfer "/volume2" "busyapp" "1" || true)" \
@@ -366,8 +408,12 @@ do
         fail "Expected busy-process guard rejection with PID $BUSY_PID, got: $op_res"
 done
 
-kill "$BUSY_PID" 2>/dev/null || true
-wait "$BUSY_PID" 2>/dev/null || true
+if [ -d /proc/$$ ]; then
+    kill "$BUSY_PID" 2>/dev/null || true
+    wait "$BUSY_PID" 2>/dev/null || true
+else
+    rm -rf "$FAKE_PROC_BUSY/$BUSY_PID"
+fi
 ensure_app_not_busy "/volume2" "busyapp" >/dev/null || fail "ensure_app_not_busy failed after busy process exited"
 
 # Test 11: JS UI mask safety checks
