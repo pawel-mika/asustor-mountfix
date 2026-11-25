@@ -216,6 +216,10 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 verField.update('v' + Ext.String.htmlEncode(newConfig.version));
             }
         }
+        var sysctlChk = page.win.down('#chkSysctlTuning');
+        if (sysctlChk && sysctlChk.setValue) {
+            sysctlChk.setValue(!!(newConfig.config && newConfig.config.enableSysctlTuning));
+        }
     },
 
     getMfConfig: function () {
@@ -223,6 +227,8 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         var panel = page.win.down('#mainPanel');
         // Retrieving data from the form
         var values = panel.getValues();
+        var sysctlChk = page.win.down('#chkSysctlTuning');
+        values.enableSysctlTuning = !!(sysctlChk && sysctlChk.getValue && sysctlChk.getValue());
         // 2. Grid (applications)
         var grid = page.win.down('#appGrid');
         values.selectedApps = grid
@@ -1022,6 +1028,13 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                             height: 18,
                             style: 'color: #b45309; font-size: 11px; line-height: 18px;',
                             html: '&nbsp;',
+                        },
+                        {
+                            xtype: 'checkbox',
+                            name: 'enableSysctlTuning',
+                            itemId: 'chkSysctlTuning',
+                            boxLabel: 'Apply kernel VM/writeback sysctl tuning on boot (swappiness=1, dirty_writeback=60s)',
+                            margin: '4 0 0 0',
                         },
                     ],
                 },

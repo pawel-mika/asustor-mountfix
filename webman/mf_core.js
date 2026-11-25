@@ -250,6 +250,13 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                             style: 'color: #b45309; font-size: 11px; line-height: 18px;',
                             html: '&nbsp;',
                         },
+                        {
+                            xtype: 'checkbox',
+                            name: 'enableSysctlTuning',
+                            itemId: 'chkSysctlTuning',
+                            boxLabel: 'Apply kernel VM/writeback sysctl tuning on boot (swappiness=1, dirty_writeback=60s)',
+                            margin: '4 0 0 0',
+                        },
                     ],
                 },
             ],

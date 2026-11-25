@@ -149,7 +149,7 @@ load_mountfix_config() {
     if [ -f "$config_file" ]; then
         cat "$config_file"
     else
-        echo '{"targetVolume": "/volume2"}'
+        echo '{"targetVolume": "", "selectedApps": [], "enableSysctlTuning": false}'
     fi
 }
 
@@ -163,7 +163,7 @@ save_mountfix_config() {
     local config_file="$config_dir/$config_filename"
     local max_backups=5
     local post_data="${1:-}"
-    local jq_bin target_vol_sentinel target_vol normalized_apps tmp_file
+    local jq_bin target_vol_sentinel target_vol normalized_apps enable_sysctl tmp_file
 
     jq_bin=$(find_jq) || {
         echo "Error: jq not found; cannot validate or save configuration" >&2
@@ -173,6 +173,7 @@ save_mountfix_config() {
     if ! printf '%s' "$post_data" | "$jq_bin" -e '
         (type == "object") and
         ((.targetVolume | type) == "string") and
+        ((.enableSysctlTuning == null) or ((.enableSysctlTuning | type) == "boolean")) and
         (
             (.selectedApps == null) or
             (
@@ -216,12 +217,15 @@ save_mountfix_config() {
     normalized_apps=$(printf '%s' "$post_data" | "$jq_bin" -c '
         [(.selectedApps // [])[] | if .enabled == false then {name: .name, enabled: false} else {name: .name} end]
     ') || return 1
+    enable_sysctl=$(printf '%s' "$post_data" | "$jq_bin" -r '
+        if .enableSysctlTuning == true then "true" else "false" end
+    ') || return 1
 
     [ -d "$config_dir" ] || mkdir -p "$config_dir"
 
     tmp_file="${config_file}.tmp.$$"
-    if ! "$jq_bin" -n --arg vol "$target_vol" --argjson apps "$normalized_apps" \
-        '{targetVolume: $vol, selectedApps: $apps}' > "$tmp_file"; then
+    if ! "$jq_bin" -n --arg vol "$target_vol" --argjson apps "$normalized_apps" --argjson sysctl "$enable_sysctl" \
+        '{targetVolume: $vol, selectedApps: $apps, enableSysctlTuning: $sysctl}' > "$tmp_file"; then
         rm -f "$tmp_file"
         return 1
     fi

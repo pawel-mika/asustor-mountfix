@@ -289,3 +289,10 @@ get_mount_configs() {
         printf '%s:%s\n' "$(get_app_data_path "$target_vol" "$app_name")" "$(get_app_plugin_path "$app_name")"
     done
 }
+
+# Check whether optional sysctl tuning is enabled in mountfix.conf (jq-free for boot)
+is_sysctl_tuning_enabled() {
+    local cfg="${1:-$CONFIG_FILE}"
+    [ -f "$cfg" ] || return 1
+    grep -qE '"enableSysctlTuning"[[:space:]]*:[[:space:]]*true' "$cfg" 2>/dev/null
+}

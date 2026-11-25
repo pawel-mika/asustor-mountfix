@@ -413,12 +413,23 @@ assert.strictEqual(hintHtml, '&nbsp;', 'actionHint must clear for stopped app');
 
 let verHtml = '';
 let setTitleCalled = false;
+let sysctlVal = null;
 p = makePage();
 p.win.setTitle = () => { setTitleCalled = true; };
-p.win.down = (sel) => (sel === '#displayVersion' ? { update(h) { verHtml = h; } } : null);
-p.setMfConfig({ config: { targetVolume: '/volume2', selectedApps: [] }, apps: [], volumes: [], version: '0.0.0.111' });
+p.win.down = (sel) => {
+    if (sel === '#displayVersion') return { update(h) { verHtml = h; } };
+    if (sel === '#chkSysctlTuning') return { setValue(v) { sysctlVal = v; }, getValue: () => sysctlVal };
+    if (sel === '#mainPanel') return { getValues: () => ({ targetVolume: '/volume2' }) };
+    if (sel === '#appGrid') return { getStore: () => ({ loadData() {}, data: { items: [] } }) };
+    return null;
+};
+p.setMfConfig({ config: { targetVolume: '/volume2', selectedApps: [], enableSysctlTuning: true }, apps: [], volumes: [], version: '0.0.0.111' });
 assert.strictEqual(setTitleCalled, false, 'setMfConfig must NOT call win.setTitle (breaks ADM header icon)');
 assert.strictEqual(verHtml, 'v0.0.0.111', 'setMfConfig must display version in footer #displayVersion');
+assert.strictEqual(sysctlVal, true, 'setMfConfig must set #chkSysctlTuning from config.enableSysctlTuning');
+assert.strictEqual(p.getMfConfig().enableSysctlTuning, true, 'getMfConfig must return boolean enableSysctlTuning=true');
+sysctlVal = false;
+assert.strictEqual(p.getMfConfig().enableSysctlTuning, false, 'getMfConfig must return boolean enableSysctlTuning=false');
 EOF
 fi
 

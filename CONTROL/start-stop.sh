@@ -19,6 +19,7 @@ ADM_SYSLOG_BIN="${ADM_SYSLOG_BIN:-/usr/sbin/syslog}"
 : "${PROC_MOUNTS:=/proc/mounts}"
 HALT_ACTION_FILE="${HALT_ACTION_FILE:-/var/log/halt-action}"
 KILL_BIN="${KILL_BIN:-kill}"
+SYSCTL_BIN="${SYSCTL_BIN:-sysctl}"
 STOP_MAX_SECONDS="${STOP_MAX_SECONDS:-12}"
 
 rotate_log() {
@@ -54,11 +55,21 @@ log_warn() {
 }
 
 apply_sysctl_tuning() {
+    if ! is_sysctl_tuning_enabled; then
+        log_msg "Sysctl tuning disabled in configuration; skipping."
+        return 0
+    fi
+    local old_swap old_vfs old_wb old_exp
+    old_swap=$("$SYSCTL_BIN" -n vm.swappiness 2>/dev/null || echo "unknown")
+    old_vfs=$("$SYSCTL_BIN" -n vm.vfs_cache_pressure 2>/dev/null || echo "unknown")
+    old_wb=$("$SYSCTL_BIN" -n vm.dirty_writeback_centisecs 2>/dev/null || echo "unknown")
+    old_exp=$("$SYSCTL_BIN" -n vm.dirty_expire_centisecs 2>/dev/null || echo "unknown")
+    log_msg "Applying sysctl tuning (previous: swappiness=${old_swap}, vfs_cache_pressure=${old_vfs}, dirty_writeback_centisecs=${old_wb}, dirty_expire_centisecs=${old_exp})"
     # Reduce swap tendency, prefer keeping VFS metadata in RAM, extend dirty writeback to 60s
-    sysctl -w vm.swappiness=1 2>/dev/null || true
-    sysctl -w vm.vfs_cache_pressure=10 2>/dev/null || true
-    sysctl -w vm.dirty_writeback_centisecs=6000 2>/dev/null || true
-    sysctl -w vm.dirty_expire_centisecs=6000 2>/dev/null || true
+    "$SYSCTL_BIN" -w vm.swappiness=1 2>/dev/null || true
+    "$SYSCTL_BIN" -w vm.vfs_cache_pressure=10 2>/dev/null || true
+    "$SYSCTL_BIN" -w vm.dirty_writeback_centisecs=6000 2>/dev/null || true
+    "$SYSCTL_BIN" -w vm.dirty_expire_centisecs=6000 2>/dev/null || true
 }
 
 is_system_shutdown() {
