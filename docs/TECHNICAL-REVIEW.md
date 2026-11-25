@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Date** | 2026-11-19 (updated 2026-11-25) |
-| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 implemented & verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branch 1 implemented in `0.0.0.106` (installed on NAS, see §8); Stage 2 Branch 2 implemented in `0.0.0.107` (`fix/transfer-engine`, see §9); Stage 2 Branch 3 implemented & verified on NAS in `0.0.0.108`–`0.0.0.115` (`fix/ui-state-and-validation`, see §10) |
+| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 implemented & verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branch 1 implemented in `0.0.0.106` (installed on NAS, see §8); Stage 2 Branch 2 implemented in `0.0.0.107` (`fix/transfer-engine`, see §9); Stage 2 Branch 3 implemented & verified on NAS in `0.0.0.108`–`0.0.0.115` (`fix/ui-state-and-validation`, see §10); Stage 2 Branch 4 implemented (`chore/lifecycle-and-repo-hygiene`, see §11) |
 | **Scope** | Whole repository: `CONTROL/`, `webman/` (CGI + shell library + ExtJS UI), `build.sh` / `buildJs.sh`, `tests/`, `etc/` |
-| **Status** | **Stage 1 complete & production-verified** (`F1`, `F2`, `F11` start-only `sysctl`, persistent logging, ADM syslog warnings, shutdown-aware cleanup). **Stage 2 Branch 1 implemented (`0.0.0.106`, installed on NAS):** `F5`, `F6`, `F7`, `F13`, `F14` and shell items of `F17` (see §8). **Stage 2 Branch 2 implemented (`0.0.0.107`, `fix/transfer-engine`):** `F4`, `F8`, `F12` (see §9). **Stage 2 Branch 3 implemented & verified on NAS (`0.0.0.108`–`0.0.0.115`, `fix/ui-state-and-validation`):** `F3`, `F9`, `F16`, JS items of `F17`, `IDEAS.md` §1, `entware` UI warning, `POST`-only mutating CGIs, and UI/manifest polish (see §10). **Remaining:** `F10`, `F11` (UI option), `F15`, and `CONTROL/common.sh` shim removal (Branch 4). |
+| **Status** | **Stage 1 & Stage 2 complete.** All audit findings `F1`–`F17` resolved across Branches 1–4 (`0.0.0.103`–`0.0.0.115` + `chore/lifecycle-and-repo-hygiene`, see §8–§11). **Remaining backlog (Post-Stage 2):** Safe *Delete target* workflow (`IDEAS.md` §2) and optional `validate.cgi` Approaches C / D.2 (`IDEAS.md` §1). |
 
 ---
 
@@ -321,13 +321,13 @@ The script changes system-wide kernel settings on **every** invocation (includin
 |---|---|---|---|
 | 1 | **F1** Safe `stop` path (`start-stop.sh.old` backup, no `fuser`/`umount -l`, `umount`-first fast path, `/proc/mounts` fallback, shutdown-gated per-path `SIGTERM`→`SIGKILL`) | ✅ **Done & verified (`0.0.0.103`–`0.0.0.105`)** | Verified on ADM 5.1.5: normal upgrades skip busy apps safely; real reboot unmounts all 5 apps in ~15 s with zero `stormand` hang. |
 | 2 | **F2** Boot & shutdown without `jq` (`etc/mounts.list` + `post-install.sh` upgrade generation) | ✅ **Done & verified (`0.0.0.103`)** | Verified with stripped `PATH` in `tests/test_stop_safety.sh` and across two real NAS reboots (`< 1 s` mount time). |
-| 3 | **F11** `sysctl` tuning on `start` only | 🟡 **Partial (`0.0.0.103`)** | Moved out of `stop` so shutdown never alters dirty writeback timers; UI toggle / restore on uninstall still optional. |
-| 4 | **F6** Shared POSIX shell library (`CONTROL/lib.sh`) | ✅ **Done (`0.0.0.106`)** | `CONTROL/lib.sh` is sourced by `start-stop.sh`, `post-install.sh` and `webman/scripts/common.sh`. `CONTROL/common.sh` is a temporary shim — **remove in Branch 4**. |
+| 3 | **F11** `sysctl` tuning on `start` only + explicit config/UI option | ✅ **Done (`0.0.0.103`, Branch 4)** | Opt-in `enableSysctlTuning` boolean (default `false`) in config & UI; `start-stop.sh start` checks it `jq`-free and logs previous kernel values before applying. |
+| 4 | **F6** Shared POSIX shell library (`CONTROL/lib.sh`) | ✅ **Done (`0.0.0.106`, Branch 4)** | `CONTROL/lib.sh` is sourced by `start-stop.sh`, `post-install.sh`, `pre-uninstall.sh`, and `webman/scripts/common.sh`. Temporary `CONTROL/common.sh` shim removed in Branch 4. |
 | 5 | **F3** Runtime mount state = boot config (`mount.cgi` updates config + `mounts.list`, mismatch warning in grid) | ✅ **Done (`0.0.0.108`)** | `mount_app`/`unmount_app` sync `etc/mountfix.conf` + `etc/mounts.list`; `validate.cgi` & grid flag `configured != mounted`; Boot column is read-only. |
 | 6 | **F4**, **F12** Safe `rsync` flags (`-aHAX`), server-side running check, non-blocking `migrate.cgi` background FD redirection | ✅ **Done (`0.0.0.107`)** | Detached background subshell (`</dev/null >/dev/null 2>&1 &`), unbuffered progress streaming, `detect_rsync_flags` (`-aH --numeric-ids` + probed `-A`/`-X`/`--outbuf=L`), mirror `--delete` with UI confirmations, and `ensure_app_not_busy` across migrate/sync-back/mount/unmount. |
-| 7 | **F13**, **F14**, **F15** NVMe SSD detection & `df -Ph`, self-relocation guard (`MountFix`), `pre-install.sh` `PATH` | 🟡 **Partial** — `F13`, `F14` ✅ done (`0.0.0.106`); `F15` ⏳ pending (Branch 4) | Unblocks NVMe volumes and prevents relocating `MountFix` itself. |
+| 7 | **F13**, **F14**, **F15** NVMe SSD detection & `df -Ph`, self-relocation guard (`MountFix`), `pre-install.sh` `PATH` & tool checks | ✅ **Done (`0.0.0.106`, Branch 4)** | Unblocks NVMe volumes, prevents relocating `MountFix`, and ensures `pre-install.sh` checks `jq`, `bash`, and `rsync` independently with Entware on `PATH`. |
 | 8 | **F5**, **F7**, **F8** Config input validation, unified CGI JSON responses, atomic transfer lock + `DONE` marker | ✅ **Done (`0.0.0.106`–`0.0.0.108`)** | `F5`, `F7` in `0.0.0.106`; `F8` in `0.0.0.107`; `POST`-only enforcement on mutating CGIs (`require_post_method`) completed in `0.0.0.108`. |
-| 9 | **F9**, **F10**, **F16**, **F17** UI cleanup, double-`validate()` fix, single-app `du` optimization (`IDEAS.md` §1), `pre-uninstall.sh` mount guard | 🟡 **Partial** — `F9`, `F16`, `F17` ✅ done (`0.0.0.108`); `F10` ⏳ pending (Branch 4) | Batched `du -sk`, non-blocking `validate(appName)`, chained `setTimeout` polling, `beforeclose` cleanup, `entware` warning done in `0.0.0.108`. |
+| 9 | **F9**, **F10**, **F16**, **F17** UI cleanup, double-`validate()` fix, single-app `du` optimization (`IDEAS.md` §1), `pre-uninstall.sh` mount guard, build/repo hygiene | ✅ **Done (`0.0.0.108`, Branch 4)** | Batched `du -sk`, non-blocking `validate(appName)`, `pre-uninstall.sh` mount guard, clean default `etc/mountfix.conf`, opt-in `--bump` in `build.sh`, non-mutating `test_ui_build.sh`, and `tests/run_all.sh`. |
 
 ### 4.1 Stage 2 Execution Plan (Agreed Branch & Commit Grouping)
 
@@ -347,9 +347,10 @@ To avoid merge conflicts in `webman/scripts/common.sh` and `webman/mf_actions.js
    - **Commit 2 (`F16` + `IDEAS.md` §1):** Suppress duplicate `validate()` firing on initial window open, stop running `validate()` concurrently with *Unmount & Sync-back*, pass single-app `validate(appName)` after per-app actions, and consolidate `du -sh` + `du -sk` into a single `du -sk` pass without full-window modal blocking.
    - **Commit 3 (`F9` + JS items from `F17`):** Move `maskStack` from prototype to instance, replace uncleaned `setInterval` polling with `beforeclose`-safe `setTimeout` chaining, remove dead `getApps()`/`apps.cgi` calls and debug leftovers (`window.qq`, `console.log`), drop unused POST body in `migrateSelectedApp`, and fix the `taskIcon` path typo.
 
-4. **Branch 4: `chore/lifecycle-and-repo-hygiene`** *(installer hooks, build tooling & repository cleanup)*
+4. **Branch 4: `chore/lifecycle-and-repo-hygiene`** ✅ **Done (see §11)** *(installer hooks, build tooling & repository cleanup)*
    - **Commit 1 (`F15` + `F10` lifecycle):** Add Entware `PATH` and independent `jq`/`bash`/`rsync` checks in `CONTROL/pre-install.sh`, block package uninstall when bind mounts are active in `CONTROL/pre-uninstall.sh`, and clear pre-selected `docker-ce` from the shipped default `etc/mountfix.conf`.
-   - **Commit 2 (`F10` build + `F11` remainder + repo cleanup):** Stop `build.sh` from dirtying tracked JS/version files on every local build, make `sysctl` writeback tuning an explicit config/UI option, remove the temporary `CONTROL/common.sh` compatibility shim, and clean up untracked `tools/` plus merged legacy branches.
+   - **Commit 2 (`F11`):** Make `sysctl` writeback tuning an explicit opt-in `enableSysctlTuning` config/UI option (default `false`), read `jq`-free on `start` and logging previous kernel values before applying.
+   - **Commit 3 (`F10` build + repo cleanup):** Stop `build.sh` from dirtying tracked JS/version files on local builds (opt-in `--bump`), remove the temporary `CONTROL/common.sh` compatibility shim and unused `toolchain/apkg-tools_py3.py`, make `test_ui_build.sh` non-mutating, and add `tests/run_all.sh`.
 
 5. **Post-Stage 2 Feature Backlog (separate ticket, tracked in `IDEAS.md` §2):**
    - **Safe "Delete Target" workflow:** UI button + `POST` backend endpoint to remove `<target>/AppCentral/<app>` only when stopped and unmounted, preceded by a read-only `src ↔ target` diff summary, a *"Sync back first"* option, and an explicit irreversible confirmation.
@@ -608,5 +609,22 @@ Implemented as 3 atomic commits plus live NAS UI/manifest polish (`0.0.0.109`–
 
 ### 10.1 Open items carried forward
 
-- **Branch 4 (`chore/lifecycle-and-repo-hygiene`):** `F15`, `F10`, `F11` (UI option), and removal of the `CONTROL/common.sh` shim.
+- **Branch 4 (`chore/lifecycle-and-repo-hygiene`):** Completed in §11 below.
+- **Post-Stage 2 (`IDEAS.md` §2):** Safe *Delete target* workflow.
+
+---
+
+## 11. Stage 2 — Branch 4 Results (`chore/lifecycle-and-repo-hygiene`)
+
+Implemented as 3 atomic commits, verified locally across all 8 test suites via `./tests/run_all.sh` and a clean `./build.sh` packaging check (zero tracked files dirtied).
+
+| Commit | Findings | Summary |
+|---|---|---|
+| `ee11864` | `F15`, `F10` (lifecycle) | `CONTROL/pre-install.sh` extends `PATH` with Entware dirs and checks `jq`, `bash`, and `rsync` independently (running `opkg update` once only if needed); `CONTROL/pre-uninstall.sh` removes unrelated MySQL comments and blocks uninstall with a clear error listing any active AppCentral bind mounts; `etc/mountfix.conf` cleared of pre-selected `docker-ce`; added `tests/test_lifecycle.sh`. |
+| `b03351e` | `F11` | Added opt-in `enableSysctlTuning` boolean (default `false`) in `etc/mountfix.conf`, `save_mountfix_config()`, `update_mountfix_app_config()`, and the ExtJS Options panel (`#chkSysctlTuning`); `CONTROL/lib.sh` provides `jq`-free `is_sysctl_tuning_enabled()`; `CONTROL/start-stop.sh start` skips tuning when disabled and logs previous kernel values when enabled. |
+| `8ad64c1` | `F10` (build & hygiene), `F6` shim removal | `build.sh` no longer mutates tracked `webman/mf_core.js` or `CONTROL/config.json` on local builds (version bump is now opt-in via `--bump`); removed temporary `CONTROL/common.sh` shim and unused `toolchain/apkg-tools_py3.py`; `tests/test_ui_build.sh` verifies `webman/mountfix.js` sync in a temp dir without dirtying the repo; added `tests/run_all.sh` and updated `README.md`. |
+
+### 11.1 Open items (Post-Stage 2)
+
+- **Live NAS verification:** Build with `./build.sh --bump` and verify the new `enableSysctlTuning` checkbox and `pre-uninstall.sh` / `pre-install.sh` hooks on ADM 5.1.5.
 - **Post-Stage 2 (`IDEAS.md` §2):** Safe *Delete target* workflow.

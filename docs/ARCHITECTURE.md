@@ -188,7 +188,7 @@ ADM enforces a 60-second per-script shutdown timeout (`/etc/script/script_trap.s
 
 ### 4.4 Shared Library (`CONTROL/lib.sh`)
 
-`CONTROL/lib.sh` is the single POSIX/BusyBox `ash` library sourced by `CONTROL/start-stop.sh`, `CONTROL/post-install.sh` and `webman/scripts/common.sh`. It holds path builders, validators (`validate_app_name`, `validate_target_volume`, `validate_mount_pair`, `is_protected_app` — `MountFix` can never be relocated), `is_mounted`, `is_app_bind_mounted`, `pids_using_paths`, `json_escape` and the `mounts.list` helpers. Paths are overridable by environment variables (`MF_ROOT`, `CONFIG_FILE`, `PROC_ROOT`, `DIR_VOL1`, …) so tests run against temp dirs. `CONTROL/common.sh` is a temporary compatibility shim (to be removed).
+`CONTROL/lib.sh` is the single POSIX/BusyBox `ash` library sourced by `CONTROL/start-stop.sh`, `CONTROL/post-install.sh`, `CONTROL/pre-uninstall.sh`, and `webman/scripts/common.sh`. It holds path builders, validators (`validate_app_name`, `validate_target_volume`, `validate_mount_pair`, `is_protected_app` — `MountFix` can never be relocated), `is_mounted`, `is_app_bind_mounted`, `pids_using_paths`, `json_escape`, `is_sysctl_tuning_enabled`, and the `mounts.list` helpers. Paths are overridable by environment variables (`MF_ROOT`, `CONFIG_FILE`, `PROC_ROOT`, `DIR_VOL1`, …) so tests run against temp dirs.
 
 ### 4.5 CGI Security & Response Contract
 
@@ -196,7 +196,7 @@ ADM enforces a 60-second per-script shutdown timeout (`/etc/script/script_trap.s
 - Mutating actions (`config.cgi?act=set`, `mount.cgi?act=mount|unmount`, `migrate.cgi?act=migrate|sync_back`) enforce `REQUEST_METHOD=POST` via `require_post_method()`; read-only actions (`act=get`, `act=status`) accept `GET`.
 - `mount_app` and `unmount_app` atomically sync `etc/mountfix.conf` and `etc/mounts.list` (`update_mountfix_app_config`), and `validate.cgi` reports per-app `configured` and `mismatch` (`configured_not_mounted` / `mounted_not_configured`) using batched single-pass `du -sk` + `format_kb_human()`.
 - All responses go through `send_json` / `send_json_error` (`Content-Type: application/json`, escaped strings). Unknown `act` returns `{"success": false, "error": "Invalid action"}`.
-- `save_mountfix_config` accepts only `{targetVolume, selectedApps:[{name}]}` with a valid volume and existing, non-protected packages, and normalizes what it stores.
+- `save_mountfix_config` accepts only `{targetVolume, selectedApps:[{name}], enableSysctlTuning}` with a valid volume, existing non-protected packages, and optional boolean `enableSysctlTuning` (default `false`), and normalizes what it stores.
 - ADM's `AS.ARC.ajax` calls `failure(json)` whenever the top-level `success` is `false`; the UI reads `json.result.target_exists` / `json.result.error` there.
 - Volume detection (`get_volume_rotational`) resolves SATA (`sdd4` → `sdd`) and NVMe/MMC (`nvme0n1p1` → `nvme0n1`) partitions, and `get_volumes_json` uses `df -Ph`.
 
@@ -204,5 +204,5 @@ ADM enforces a 60-second per-script shutdown timeout (`/etc/script/script_trap.s
 
 ## 5. Additional Architecture Topics
 
-For full audit history, field findings, and the remaining roadmap (Branch 4 lifecycle & repo hygiene, and the post-Stage 2 *Delete target* workflow), see [docs/TECHNICAL-REVIEW.md](TECHNICAL-REVIEW.md) and [IDEAS.md](../IDEAS.md).
+For full audit history, field findings, and the post-Stage 2 backlog (*Delete target* workflow), see [docs/TECHNICAL-REVIEW.md](TECHNICAL-REVIEW.md) and [IDEAS.md](../IDEAS.md).
 
