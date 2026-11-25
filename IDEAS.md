@@ -78,3 +78,56 @@ Allow users to reclaim space on the target SSD volume by deleting `<target>/AppC
    - If differences exist, offer **"Sync back first, then delete"** alongside **"Delete target only"** and **"Cancel"**.
 4. **Explicit Irreversible Confirmation:**
    - Clearly warn that deletion cannot be undone and require explicit confirmation (e.g. typing the application name) before invoking the `POST` delete endpoint.
+
+---
+
+## 3. HDD Wakeup & I/O Diagnostics ("What's Waking My HDD?") (Future Feature)
+
+### 3.1 Goal
+Help the user identify **which processes or AppCentral packages are still reading/writing to mechanical HDD volumes** (e.g. `/volume1`) so they can either relocate those apps to SSD with MountFix or diagnose why drives fail to enter hibernation/standby.
+
+### 3.2 Technical Approaches & Trade-offs
+
+#### A. Process-Level I/O Collection (Two-Backend Strategy)
+Both `/proc/<pid>/io` and `iotop` rely on Linux `CONFIG_TASK_IO_ACCOUNTING` and measure per-process storage I/O (`read_bytes` / `write_bytes`), **not** which disk/volume was hit.
+
+1. **Zero-dependency default — `/proc/<pid>/io` delta sampling:**
+   - Take two snapshots of `/proc/[0-9]*/io` (`read_bytes`, `write_bytes`, `cancelled_write_bytes`) separated by a short window (e.g. 3–5 seconds) and compute per-PID deltas in `awk`.
+   - **Pros:** Zero external binaries, works out of the box on any ASUSTOR architecture, easy to test and maintain in POSIX `sh` + `awk`.
+   - **Cons:** Misses very short-lived processes that start and exit between the two snapshots; does not report `%IO` wait.
+2. **Bundled `iotop-static` (`x86-64`) backend:**
+   - Because ASUSTOR ADM does not ship `iotop`, bundling a statically compiled `iotop-static` (e.g. `iotop-c` built statically for `x86-64`, matching `CONTROL/config.json`'s `architecture: "x86-64"`) inside the APKG (e.g. `bin/iotop-static`, with optional override via `/opt/sbin/iotop-static`) makes it work out of the box for all users.
+   - Invoke it in non-interactive batch mode (e.g. `iotop-static -b -o -P -k -q ...`, adjusted to exact CLI flags of the compiled binary) and parse output with `awk`.
+   - **Pros:** Uses Linux Netlink `taskstats` (accurate real-time rates, catches thread/process activity cleanly, reports `%IO` wait), works even when nothing extra is installed on the NAS.
+   - **Cons:** Requires maintaining a reproducible build recipe for the static `x86-64` binary (and keeping `/proc/<pid>/io` as a zero-binary fallback).
+
+*(Note: Classic `/proc/sys/vm/block_dump` was removed in Linux 5.15+, so it is not available on ADM 5.x kernels.)*
+
+#### B. Critical Missing Piece: Attributing I/O to HDD vs. SSD
+Neither `/proc/<pid>/io` nor `iotop` tells you **which volume** a process touched. To filter out SSD activity and pinpoint HDD culprits:
+1. **Disk-level verification (zero wakeup):**
+   - Check `/sys/block/<dev>/stat` (or `/proc/diskstats`) sector read/write deltas for the HDD RAID/member devices during the same sampling window to confirm physical HDD I/O actually occurred.
+   - Check drive power state via `hdparm -C /dev/sdX` (or `smartctl -i -n standby`) — safe to run without waking sleeping drives.
+2. **Per-PID device correlation via `st_dev`:**
+   - Resolve the device ID of `/volume1` (`stat -c %d /volume1`).
+   - For each PID with non-zero I/O delta, inspect `/proc/<pid>/fd/*` and `/proc/<pid>/cwd` using `stat -L -c %d`.
+   - **Key advantage with MountFix:** Files inside a bind-mounted AppCentral app report the **SSD's `st_dev`**, not `/volume1`'s `st_dev`, so relocated apps are automatically separated from real HDD access.
+3. **AppCentral mapping:**
+   - Match active HDD paths (`/volume1/.@plugins/AppCentral/<app>/...`) or process `cmdline` against installed AppCentral packages to highlight: *"This process belongs to `<app>`, which is currently on HDD — consider relocating it to SSD."*
+
+### 3.3 Sampling Modes, Prototype Scripts & Safety Constraints
+- **Reference prototypes:** Initial non-root shell observers are archived in `docs/prototypes/diskwatch/` (`diskwatch.sh`, `diskwatch2.sh`, `diskwatch3.sh`) — not packaged into the APKG (`build.sh` only packs `CONTROL/`, `webman/`, `etc/`).
+  - **What to carry over:** Event-driven logging on `/proc/diskstats` changes, writing strictly to `tmpfs` (`/tmp`) so the observer never triggers HDD writes.
+  - **What to improve when integrating into MountFix (runs as `root`):**
+    1. Replace CPU-burn guessing (`/proc/*/stat`) with real per-PID I/O deltas (`/proc/[0-9]*/io` `read_bytes`/`write_bytes` or bundled `iotop-static`), keeping `D`-state detection as an extra signal.
+    2. Dynamically detect rotational HDD block devices (`rotational == 1`) and their partitions/`md*` instead of hardcoding `sd[a-c][24]`.
+    3. Initialize `prevhdd` *before* the loop so the first sample does not emit a false `HDD-ACTIVITY` event on idle/sleeping drives.
+    4. Compute and store **deltas** (`+R / +W`) rather than raw cumulative boot counters.
+- **Supported durations & adaptive intervals:**
+  - Preset durations: `5s`, `30s`, `60s`, `300s` (5m), `600s` (10m), `1200s` (20m).
+  - Short runs (`5 / 30 / 60s`): 1s sampling interval; longer background runs (`300 / 600 / 1200s`): 3s sampling interval with lock/PID/status JSON in `/tmp` (`tmpfs`), Start/Stop controls, and auto-stop timer.
+- **UI Presentation:** A lightweight "HDD Activity Monitor" modal or tab showing:
+  - Controls (`5s / 30s / 60s / 5m / 10m / 20m`, Start/Stop, progress `elapsed / total`), HDD power state (`standby` / `active/idle`), and total physical HDD read/write delta during the capture.
+  - **Tab 1 — Summary (Top Culprits):** Aggregated per process (`Process / AppCentral`, `HDD Hits`, `Read/Write KB`, `D-state`, `Last Seen`, `Target Volume`, and a *"Still on HDD — can relocate"* badge for unmounted AppCentral packages).
+  - **Tab 2 — Timeline:** Chronological list of actual HDD activity events (`HH:MM:SS | dev (+R/+W) | active processes`).
+  - Badge indicating which collector ran (`iotop-static` vs `/proc/io`).
