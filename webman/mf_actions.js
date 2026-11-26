@@ -23,6 +23,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         var btnMount = this.win.down('#btnMount');
         var btnUnmount = this.win.down('#btnUnmount');
         var btnSyncBack = this.win.down('#btnSyncBack');
+        var btnDeleteTarget = this.win.down('#btnDeleteTarget');
         var actionHint = this.win.down('#actionHint');
         if (!btnCopyToTarget) return;
 
@@ -31,13 +32,17 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             const mounted = !!this.selectedApp.get('mounted');
             const running = !!this.selectedApp.get('enabled');
             const existsInTarget = !!this.selectedApp.get('existsInTarget');
+            const configured = !!(this.selectedApp.get('configured') || this.selectedApp.get('selected'));
             const appName = this.selectedApp.get('name');
             btnCopyToTarget.setText('Copy to target: ' + appName);
-            // All actions (Copy, Mount, Unmount, Sync) require validation to finish and the app to be stopped
+            // All actions (Copy, Mount, Unmount, Sync, Delete) require validation to finish and the app to be stopped
             btnCopyToTarget.setDisabled(validating || running || mounted);
             btnMount.setDisabled(validating || running || !existsInTarget || mounted);
             btnUnmount.setDisabled(validating || running || !mounted);
             btnSyncBack.setDisabled(validating || running || !existsInTarget || mounted);
+            if (btnDeleteTarget) {
+                btnDeleteTarget.setDisabled(validating || running || mounted || !existsInTarget || configured);
+            }
             if (actionHint) {
                 if (validating) {
                     actionHint.update('Validating configuration... actions are temporarily disabled.');
@@ -45,7 +50,13 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                     actionHint.update(
                         'Stop <b>' +
                             Ext.String.htmlEncode(appName) +
-                            '</b> in AppCentral first to copy, mount, unmount, or sync back.',
+                            '</b> in AppCentral first to copy, mount, unmount, sync back, or delete target.',
+                    );
+                } else if (!mounted && existsInTarget && configured) {
+                    actionHint.update(
+                        'Uncheck <b>Boot</b> and click <b>Apply</b> before deleting the target copy of <b>' +
+                            Ext.String.htmlEncode(appName) +
+                            '</b>.',
                     );
                 } else {
                     actionHint.update('&nbsp;');
@@ -57,6 +68,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             btnMount.disable();
             btnUnmount.disable();
             btnSyncBack.disable();
+            if (btnDeleteTarget) {
+                btnDeleteTarget.disable();
+            }
             if (actionHint) {
                 actionHint.update('&nbsp;');
             }
@@ -432,10 +446,10 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         });
     },
 
-    syncBackSelectedApp: function (callbackOnComplete, skipConfirm) {
+    syncBackSelectedApp: function (callbackOnComplete, skipConfirm, overrideTarget, overrideApp) {
         var page = this;
-        var target = page.getSelectedVolume();
-        var app = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
+        var target = overrideTarget || page.getSelectedVolume();
+        var app = overrideApp || (page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name));
 
         if (!target || !app) {
             page.updateStatus('Error: Select volume and application first', true);
@@ -758,6 +772,258 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         page._pollTimer = setTimeout(poll, 500);
     },
 
+    buildDeleteTargetSummaryHtml: function (target, app, preview) {
+        var enc = Ext.String.htmlEncode;
+        var p = preview || {};
+        var counts = p.counts || {};
+        var extra = counts.extraOnSsd || 0;
+        var modified = counts.modifiedOnSsd || 0;
+        var hddOnly = counts.onlyOnHdd || 0;
+        var total = p.totalChanges || (extra + modified + hddOnly);
+        var samples = p.samples || [];
+        var targetPath = p.targetPath || (target + '/AppCentral/' + app);
+        var targetSize = p.targetSize && p.targetSize !== '0' ? p.targetSize : '0';
+        var hasDiff = !!(p.hasDifferences || p.hasHddOnly);
+
+        var html =
+            '<div style="font-size: 12px; line-height: 18px;">' +
+            '<div style="font-size: 13px; font-weight: bold; margin-bottom: 6px;">' +
+            'Delete SSD copy of ' + enc(app) + '?' +
+            '</div>' +
+            '<div style="margin-bottom: 10px;">' +
+            'Target path: <code>' + enc(targetPath) + '</code> &nbsp;|&nbsp; Reclaimable space: <b>' + enc(targetSize) + '</b>' +
+            '</div>';
+
+        if (hasDiff) {
+            html +=
+                '<div style="background:#fef3c7; border:1px solid #f59e0b; border-radius:4px; padding:8px 10px; margin-bottom:10px; color:#78350f;">' +
+                '<b>Differences detected between SSD target and /volume1 copy:</b><br>' +
+                '&bull; Extra on SSD (not on /volume1): <b>' + extra + '</b><br>' +
+                '&bull; Modified on SSD vs /volume1: <b>' + modified + '</b><br>' +
+                '&bull; Only on /volume1 (removed on SSD): <b>' + hddOnly + '</b>';
+
+            if (samples.length > 0) {
+                var lines = samples.map(function (item) {
+                    var prefix = item.change === 'extra_on_ssd' ? '+ ' : item.change === 'only_on_hdd' ? '- ' : '~ ';
+                    return prefix + enc(item.path || '');
+                });
+                if (total > samples.length) {
+                    lines.push('... and ' + (total - samples.length) + ' more');
+                }
+                html +=
+                    '<div style="margin-top:6px; max-height:110px; overflow:auto; background:#fffbeb; border:1px solid #fde68a; padding:6px 8px; font-family:monospace; font-size:11px; white-space:pre;">' +
+                    lines.join('\n') +
+                    '</div>';
+            }
+            html += '</div>';
+        } else {
+            html +=
+                '<div style="background:#dcfce7; border:1px solid #16a34a; border-radius:4px; padding:8px 10px; margin-bottom:10px; color:#14532d;">' +
+                '<b>In sync with /volume1:</b> No newer or extra files were detected on the target SSD.' +
+                '</div>';
+        }
+
+        html +=
+            '<div style="color:#991b1b; margin-top:4px;">' +
+            '<b>Warning:</b> Deletion is permanent and cannot be undone. Type <b>' + enc(app) + '</b> below to enable deletion.' +
+            '</div>' +
+            '</div>';
+        return html;
+    },
+
+    showDeleteTargetDialog: function (target, app, preview) {
+        var page = this;
+        var hasDiff = !!(preview && (preview.hasDifferences || preview.hasHddOnly));
+        var summaryHtml = page.buildDeleteTargetSummaryHtml(target, app, preview);
+
+        if (Ext.ClassManager && Ext.ClassManager.isCreated('AS.ARC.subWindow')) {
+            var dlg = null;
+            var setDeleteButtonsEnabled = function (enabled) {
+                if (!dlg) return;
+                var bSync = dlg.down('#btnConfirmSyncAndDelete');
+                var bDel = dlg.down('#btnConfirmDeleteTarget');
+                if (bSync) bSync.setDisabled(!enabled);
+                if (bDel) bDel.setDisabled(!enabled);
+            };
+
+            var fbar = [];
+            if (hasDiff) {
+                fbar.push({
+                    text: 'Sync back & Delete target',
+                    itemId: 'btnConfirmSyncAndDelete',
+                    disabled: true,
+                    handler: function () {
+                        dlg.close();
+                        page.syncBackSelectedApp(
+                            function () {
+                                page.executeDeleteTarget(target, app, app);
+                            },
+                            true,
+                            target,
+                            app,
+                        );
+                    },
+                });
+                fbar.push({
+                    text: 'Delete target only',
+                    itemId: 'btnConfirmDeleteTarget',
+                    disabled: true,
+                    handler: function () {
+                        dlg.close();
+                        page.executeDeleteTarget(target, app, app);
+                    },
+                });
+            } else {
+                fbar.push({
+                    text: 'Delete target',
+                    itemId: 'btnConfirmDeleteTarget',
+                    disabled: true,
+                    handler: function () {
+                        dlg.close();
+                        page.executeDeleteTarget(target, app, app);
+                    },
+                });
+            }
+            fbar.push({
+                text: 'Cancel',
+                handler: function () {
+                    dlg.close();
+                },
+            });
+
+            dlg = Ext.create('AS.ARC.subWindow', {
+                parentWin: page.win,
+                title: 'Delete Target Copy: ' + app,
+                width: 640,
+                height: hasDiff ? 460 : 330,
+                layout: {
+                    type: 'vbox',
+                    align: 'stretch',
+                },
+                modal: true,
+                items: [
+                    {
+                        xtype: 'panel',
+                        border: false,
+                        flex: 1,
+                        autoScroll: true,
+                        bodyPadding: '12 16 6 16',
+                        html: summaryHtml,
+                    },
+                    {
+                        xtype: 'container',
+                        padding: '6 16 12 16',
+                        layout: 'anchor',
+                        items: [
+                            {
+                                xtype: 'textfield',
+                                itemId: 'txtConfirmDeleteApp',
+                                anchor: '100%',
+                                fieldLabel: 'Type app name',
+                                labelWidth: 110,
+                                emptyText: app,
+                                enableKeyEvents: true,
+                                listeners: {
+                                    change: function (field, newVal) {
+                                        setDeleteButtonsEnabled((newVal || '') === app);
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                ],
+                fbar: fbar,
+            });
+            dlg.show();
+        } else {
+            Ext.Msg.prompt(
+                'Delete Target Copy: ' + app,
+                'Permanently delete ' + Ext.String.htmlEncode(target + '/AppCentral/' + app) + '? Type ' + Ext.String.htmlEncode(app) + ' to confirm:',
+                function (btn, text) {
+                    if (btn === 'ok' && text === app) {
+                        page.executeDeleteTarget(target, app, text);
+                    }
+                },
+            );
+        }
+    },
+
+    deleteSelectedAppTarget: function () {
+        var page = this;
+        var target = page.getSelectedVolume();
+        var app = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
+
+        if (!target || !app) {
+            page.updateStatus('Error: Select volume and application first', true);
+            return;
+        }
+
+        var actionMsg = 'Checking target copy for ' + app + '...';
+        page.maskWindow(actionMsg);
+
+        AS.ARC.ajax({
+            url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, { act: 'delete_preview', target: target, app: app }),
+            method: 'GET',
+            enableFailureReturn: true,
+            success: function (json) {
+                page.unmaskWindow(actionMsg);
+                var res = (json && json.result) || {};
+                if (json && json.success && res.success !== false) {
+                    page.showDeleteTargetDialog(target, app, res);
+                } else {
+                    page.updateStatus('Error: ' + (res.error || (json && json.error) || 'Delete preview failed'), true);
+                }
+            },
+            failure: function (json) {
+                page.unmaskWindow(actionMsg);
+                var res = (json && json.result) || {};
+                page.updateStatus('Error: ' + (res.error || (json && json.error) || 'Unable to inspect target copy'), true);
+            },
+        });
+    },
+
+    executeDeleteTarget: function (target, app, confirmName) {
+        var page = this;
+        var actionMsg = 'Deleting target copy of ' + app + '...';
+        page.maskWindow(actionMsg);
+
+        AS.ARC.ajax({
+            url: AS.ARC.util.getApiUrlWithSid(page.migrateApiUrl, {
+                act: 'delete_target',
+                target: target,
+                app: app,
+                confirm: confirmName,
+            }),
+            method: 'POST',
+            enableFailureReturn: true,
+            success: function (json) {
+                page.unmaskWindow(actionMsg);
+                var res = (json && json.result) || {};
+                if (json && json.success && res.success !== false) {
+                    if (res.volumes && res.volumes.length > 0) {
+                        var combo = page.win.down('combo[name=targetVolume]');
+                        if (combo && combo.getStore) {
+                            var curVal = combo.getValue ? combo.getValue() : target;
+                            if (combo.suspendEvents) combo.suspendEvents();
+                            combo.getStore().loadData(res.volumes);
+                            if (combo.setValue) combo.setValue(curVal);
+                            if (combo.resumeEvents) combo.resumeEvents();
+                        }
+                    }
+                    page.updateStatus(res.message || ('Deleted target copy of ' + app), false);
+                    page.validate(app, true);
+                } else {
+                    page.updateStatus('Error: ' + (res.error || (json && json.error) || 'Failed to delete target copy'), true);
+                }
+            },
+            failure: function (json) {
+                page.unmaskWindow(actionMsg);
+                var res = (json && json.result) || {};
+                page.updateStatus('Error: ' + (res.error || (json && json.error) || 'Unable to delete target copy'), true);
+            },
+        });
+    },
+
     showHelpDialog: function () {
         var page = this;
         var docUrl = page.helpDocUrl || 'https://github.com/pawel-mika/asustor-mountfix#readme';
@@ -766,10 +1032,11 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             '<b>Relocate an app (HDD &rarr; SSD):</b><br>' +
             '1. Stop the app in AppCentral &rarr; 2. <b>Copy to target</b> &rarr; 3. <b>Mount</b> &rarr; 4. Start the app.<br><br>' +
             '<b>Move back to HDD (SSD &rarr; HDD):</b><br>' +
-            '1. Stop the app in AppCentral &rarr; 2. <b>Unmount &amp; Sync-back</b> &rarr; 3. Start the app.<br><br>' +
+            '1. Stop the app in AppCentral &rarr; 2. <b>Unmount &amp; Sync-back</b> &rarr; 3. Start the app &rarr; 4. (Optional) <b>Delete target</b> to reclaim SSD space.<br><br>' +
             '<b>Important safety rules:</b><br>' +
-            '&bull; Always stop an application before copying, mounting, unmounting, or syncing back.<br>' +
+            '&bull; Always stop an application before copying, mounting, unmounting, syncing back, or deleting target data.<br>' +
             '&bull; <b>Sync back</b> and overwriting an existing target use mirror mode (<code>--delete</code>).<br>' +
+            '&bull; <b>Delete target</b> previews SSD vs. HDD differences first and requires typing the app name.<br>' +
             '&bull; Unmount all apps before uninstalling MountFix (uninstall is blocked while mounts are active).<br>' +
             '&bull; Kernel <code>sysctl</code> tuning is optional (off by default) and applies on boot only.<br><br>' +
             '<a href="' + docUrl + '" target="_blank" rel="noopener noreferrer" style="color: #007dff; text-decoration: underline;">' +

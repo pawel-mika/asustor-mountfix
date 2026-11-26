@@ -62,7 +62,9 @@ Inspecting `webman/validate.cgi` and `webman/scripts/common.sh` reveals the foll
 
 ---
 
-## 2. Safe "Delete Target" Workflow (Future Feature)
+## 2. Safe "Delete Target" Workflow
+
+> **Status:** **Implemented** (`webman/scripts/common.sh`, `webman/migrate.cgi`, `webman/mf_core.js`, `webman/mf_actions.js`, `tests/test_delete_target.sh`, `tests/test_ui_build.sh`) with multi-layer server-side safety guards, read-only `rsync --dry-run --itemize-changes` diff inspection, recovery-first *"Sync back & Delete target"* workflow, explicit app-name confirmation modal, and audit logging.
 
 ### 2.1 Goal
 Allow users to reclaim space on the target SSD volume by deleting `<target>/AppCentral/<app>` after reverting an application to `/volume1`, without risking accidental data loss.

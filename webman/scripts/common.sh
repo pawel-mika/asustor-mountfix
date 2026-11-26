@@ -1022,3 +1022,344 @@ get_transfer_status_json() {
     printf '{"app": "%s", "state": "%s", "progress": %s, "lastLine": "%s", "pid": %s}\n' \
         "$safe_app" "$state" "$percent" "$safe_last_line" "$pid_json"
 }
+
+####################################################################
+# Safe "Delete Target" workflow helpers (IDEAS.md §2)
+####################################################################
+_stat_dev_inode() {
+    stat -c %d:%i "$1" 2>/dev/null || stat -f %d:%i "$1" 2>/dev/null || true
+}
+
+is_app_enabled_in_appcentral() {
+    local app_name="$1"
+    local json_file="${INSTALLED_APPS_JSON:-/usr/builtin/etc/appcentral/installed.json}"
+    local jq_bin
+
+    [ -f "$json_file" ] || return 1
+    jq_bin=$(find_jq 2>/dev/null) || return 1
+    "$jq_bin" -e --arg app "$app_name" \
+        'any(.packages[]?; .package == $app and .enabled == true)' "$json_file" >/dev/null 2>&1
+}
+
+has_any_mount_under_path() {
+    local raw_path="${1:-}"
+    local norm_path
+    [ -n "$raw_path" ] || return 1
+    [ -r "$PROC_MOUNTS" ] || return 1
+
+    norm_path="${raw_path%/}"
+    [ -n "$norm_path" ] || return 0
+
+    awk -v p="$norm_path" '
+        {
+            if ($1 == p || $2 == p || index($1, p "/") == 1 || index($2, p "/") == 1) {
+                found = 1
+                exit 0
+            }
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$PROC_MOUNTS" 2>/dev/null
+}
+
+_is_transfer_lock_active() {
+    local lock_pid=""
+    [ -d "$TRANSFER_LOCK_DIR" ] || return 1
+    lock_pid=$(tr -d ' \t\r\n' < "$TRANSFER_LOCK_DIR/pid" 2>/dev/null || true)
+    case "$lock_pid" in
+        ''|*[!0-9]*) return 1 ;;
+        *) kill -0 "$lock_pid" 2>/dev/null ;;
+    esac
+}
+
+ensure_delete_target_allowed() {
+    local target_volume="$1"
+    local app_name="$2"
+    local src_app tgt_parent tgt_app real_parent real_tgt real_src src_ino tgt_ino
+    local configured_apps cfg_line cfg_tgt
+
+    if ! validate_target_volume "$target_volume"; then
+        echo '{"success": false, "error": "Invalid target volume"}'
+        return 1
+    fi
+    if [ "$target_volume" = "/volume1" ] || [ "${VOLUME_ROOT:-}$target_volume" = "$DIR_VOL1" ]; then
+        echo '{"success": false, "error": "Refusing to delete target on /volume1"}'
+        return 1
+    fi
+    if ! validate_app_name "$app_name"; then
+        echo '{"success": false, "error": "Invalid or protected app name"}'
+        return 1
+    fi
+
+    src_app=$(get_app_plugin_path "$app_name")
+    if [ ! -d "$src_app" ] || [ -L "$src_app" ]; then
+        echo '{"success": false, "error": "Source application directory does not exist on /volume1"}'
+        return 1
+    fi
+
+    tgt_parent="${VOLUME_ROOT:-}${target_volume}/${DIR_APP_CENTRAL}"
+    tgt_app="${tgt_parent}/${app_name}"
+
+    if [ -L "$tgt_parent" ] || [ ! -d "$tgt_parent" ]; then
+        echo '{"success": false, "error": "Target AppCentral directory is invalid"}'
+        return 1
+    fi
+    if [ -L "$tgt_app" ]; then
+        echo '{"success": false, "error": "Refusing to delete symlink target path"}'
+        return 1
+    fi
+    if [ ! -d "$tgt_app" ]; then
+        echo '{"success": false, "error": "Target data directory does not exist on SSD"}'
+        return 1
+    fi
+
+    real_parent=$(cd -P "$tgt_parent" 2>/dev/null && pwd)
+    real_tgt=$(cd -P "$tgt_app" 2>/dev/null && pwd)
+    real_src=$(cd -P "$src_app" 2>/dev/null && pwd)
+    if [ -z "$real_parent" ] || [ -z "$real_tgt" ] || [ -z "$real_src" ] || \
+       [ "$real_tgt" != "${real_parent}/${app_name}" ] || [ "$real_tgt" = "/" ] || [ "$real_tgt" = "$real_parent" ]; then
+        echo '{"success": false, "error": "Resolved target path failed safety verification"}'
+        return 1
+    fi
+
+    src_ino=$(_stat_dev_inode "$real_src")
+    tgt_ino=$(_stat_dev_inode "$real_tgt")
+    if [ -n "$src_ino" ] && [ "$src_ino" = "$tgt_ino" ]; then
+        echo '{"success": false, "error": "Cannot delete target while application is mounted. Unmount it first!"}'
+        return 1
+    fi
+
+    if is_app_bind_mounted "$target_volume" "$app_name"; then
+        echo '{"success": false, "error": "Cannot delete target while application is mounted. Unmount it first!"}'
+        return 1
+    fi
+
+    if has_any_mount_under_path "$tgt_app" || has_any_mount_under_path "$real_tgt" || \
+       has_any_mount_under_path "$src_app" || has_any_mount_under_path "$real_src"; then
+        echo '{"success": false, "error": "Active mount or submount detected under application path. Unmount it first!"}'
+        return 1
+    fi
+
+    configured_apps=$(get_configured_apps_for_volume "$target_volume" 2>/dev/null || true)
+    if printf '%s\n' "$configured_apps" | grep -qxF "$app_name"; then
+        echo '{"success": false, "error": "Application is still configured for boot mount. Uncheck Boot and click Apply first."}'
+        return 1
+    fi
+    if [ -f "${MOUNTS_LIST_FILE:-$(dirname "$CONFIG_FILE")/mounts.list}" ]; then
+        if get_mount_configs 2>/dev/null | awk -F: -v app="$app_name" '
+            {
+                n = split($2, parts, "/")
+                if (parts[n] == app) { found = 1; exit 0 }
+            }
+            END { exit(found ? 0 : 1) }
+        '; then
+            echo '{"success": false, "error": "Application is still listed in mounts.list. Uncheck Boot and click Apply first."}'
+            return 1
+        fi
+    fi
+
+    if is_app_enabled_in_appcentral "$app_name"; then
+        echo '{"success": false, "error": "Application is enabled in AppCentral. Stop it first."}'
+        return 1
+    fi
+
+    ensure_app_not_busy "$target_volume" "$app_name" || return 1
+    return 0
+}
+
+preview_delete_target() {
+    local target_volume="$1"
+    local app_name="$2"
+    local src_app tgt_app real_src real_tgt target_size_kb target_size
+    local base_flags diff_file rsync_rc parsed_json
+    local esc_app esc_vol esc_path esc_size
+
+    ensure_delete_target_allowed "$target_volume" "$app_name" || return 1
+
+    if _is_transfer_lock_active; then
+        echo '{"success": false, "error": "Another transfer or delete operation is currently in progress"}'
+        return 1
+    fi
+
+    src_app=$(get_app_plugin_path "$app_name")
+    tgt_app=$(get_app_data_path "$target_volume" "$app_name")
+    real_src=$(cd -P "$src_app" 2>/dev/null && pwd)
+    real_tgt=$(cd -P "$tgt_app" 2>/dev/null && pwd)
+
+    target_size_kb=$(get_size_kb "$real_tgt")
+    case "$target_size_kb" in
+        ''|*[!0-9]*) target_size_kb=0 ;;
+    esac
+    target_size=$(format_kb_human "$target_size_kb")
+
+    diff_file=$(mktemp "${TMPDIR:-/tmp}/mountfix_diff.XXXXXX") || {
+        echo '{"success": false, "error": "Failed to create temporary diff file"}'
+        return 1
+    }
+
+    base_flags=$(detect_rsync_flags "$real_tgt" "$real_src")
+    # shellcheck disable=SC2086
+    "$RSYNC_BIN" $base_flags --dry-run --itemize-changes --delete "$real_tgt/" "$real_src/" > "$diff_file" 2>/dev/null
+    rsync_rc=$?
+
+    if [ "$rsync_rc" -ne 0 ]; then
+        rm -f "$diff_file"
+        printf '{"success": false, "error": "Diff inspection failed (rsync exit code: %s)"}\n' "$rsync_rc"
+        return 1
+    fi
+
+    parsed_json=$(awk '
+        function jesc(s,   i, n, c, out) {
+            out = ""
+            n = length(s)
+            for (i = 1; i <= n; i++) {
+                c = substr(s, i, 1)
+                if (c == "\\") out = out "\\\\"
+                else if (c == "\"") out = out "\\\""
+                else if (c == "\t") out = out "\\t"
+                else if (c == "\r") out = out "\\r"
+                else out = out c
+            }
+            return out
+        }
+        BEGIN {
+            extra = 0; mod = 0; hdd_only = 0; sample_n = 0; max_samples = 20
+        }
+        {
+            line = $0
+            sub(/\r$/, "", line)
+            if (line == "") next
+
+            sp = index(line, " ")
+            if (sp <= 1) next
+            tag = substr(line, 1, sp - 1)
+            path = substr(line, sp + 1)
+            sub(/^[ ]+/, "", path)
+            if (path == "" || path == "." || path == "./") next
+
+            kind = ""
+            if (tag == "*deleting") {
+                hdd_only++
+                kind = "only_on_hdd"
+            } else if (substr(tag, 1, 2) == ".d") {
+                # Ignore benign directory mtime/metadata noise on synced directories
+                next
+            } else if (tag ~ /^[>c].*\+\+\+\+\+/) {
+                extra++
+                kind = "extra_on_ssd"
+            } else if (tag ~ /^[>ch\.][fLDS]/) {
+                rest = substr(tag, 3)
+                if (rest ~ /[^\.]/ || substr(tag, 1, 1) == ">") {
+                    mod++
+                    kind = "modified_on_ssd"
+                }
+            }
+
+            if (kind != "" && sample_n < max_samples) {
+                sample_n++
+                s_kind[sample_n] = kind
+                s_path[sample_n] = path
+            }
+        }
+        END {
+            has_diff = ((extra + mod) > 0) ? "true" : "false"
+            has_hdd = (hdd_only > 0) ? "true" : "false"
+            total = extra + mod + hdd_only
+            printf "\"hasDifferences\": %s, \"hasHddOnly\": %s, \"totalChanges\": %d, \"counts\": {\"extraOnSsd\": %d, \"modifiedOnSsd\": %d, \"onlyOnHdd\": %d}, \"samples\": [", has_diff, has_hdd, total, extra, mod, hdd_only
+            for (i = 1; i <= sample_n; i++) {
+                if (i > 1) printf ","
+                printf "{\"change\": \"%s\", \"path\": \"%s\"}", s_kind[i], jesc(s_path[i])
+            }
+            printf "]"
+        }
+    ' "$diff_file")
+    rm -f "$diff_file"
+
+    esc_app=$(json_escape "$app_name")
+    esc_vol=$(json_escape "$target_volume")
+    esc_path=$(json_escape "${target_volume}/${DIR_APP_CENTRAL}/${app_name}")
+    esc_size=$(json_escape "$target_size")
+
+    printf '{"success": true, "app": "%s", "targetVolume": "%s", "targetPath": "%s", "targetSize": "%s", "targetSizeKb": %s, %s}\n' \
+        "$esc_app" "$esc_vol" "$esc_path" "$esc_size" "$target_size_kb" "$parsed_json"
+    return 0
+}
+
+delete_app_target() {
+    local target_volume="$1"
+    local app_name="$2"
+    local confirm_name="${3:-}"
+    local locked=0 attempt=0
+    local tgt_app real_tgt reclaimed_kb reclaimed_human volumes_json
+    local esc_app esc_path esc_size log_file log_dir
+
+    if ! validate_app_name "$app_name"; then
+        echo '{"success": false, "error": "Invalid or protected app name"}'
+        return 1
+    fi
+    if [ -z "$confirm_name" ] || [ "$confirm_name" != "$app_name" ]; then
+        echo '{"success": false, "error": "Confirmation mismatch: type the exact application name"}'
+        return 1
+    fi
+
+    # Brief bounded retry handles the sub-second lock handoff right after sync_back writes DONE
+    while [ "$attempt" -lt 5 ]; do
+        if acquire_transfer_lock "$$"; then
+            locked=1
+            break
+        fi
+        attempt=$((attempt + 1))
+        sleep 0.2 2>/dev/null || sleep 1
+    done
+    if [ "$locked" -ne 1 ]; then
+        echo '{"success": false, "error": "Another transfer or delete operation is currently in progress"}'
+        return 1
+    fi
+
+    if ! ensure_delete_target_allowed "$target_volume" "$app_name"; then
+        release_transfer_lock "$$"
+        return 1
+    fi
+
+    tgt_app=$(get_app_data_path "$target_volume" "$app_name")
+    real_tgt=$(cd -P "$tgt_app" 2>/dev/null && pwd)
+    if [ -z "$real_tgt" ] || [ "$real_tgt" = "/" ]; then
+        release_transfer_lock "$$"
+        echo '{"success": false, "error": "Resolved target path failed safety verification"}'
+        return 1
+    fi
+
+    reclaimed_kb=$(get_size_kb "$real_tgt")
+    case "$reclaimed_kb" in
+        ''|*[!0-9]*) reclaimed_kb=0 ;;
+    esac
+    reclaimed_human=$(format_kb_human "$reclaimed_kb")
+
+    if ! find "$real_tgt" -xdev -depth -delete 2>/dev/null; then
+        # Fallback for BusyBox builds lacking find -delete (submounts and symlinks already verified absent)
+        rm -rf -- "$real_tgt" 2>/dev/null || true
+    fi
+
+    if [ -e "$real_tgt" ]; then
+        release_transfer_lock "$$"
+        echo '{"success": false, "error": "Failed to completely remove target directory"}'
+        return 1
+    fi
+
+    log_file="${LOG_FILE:-$MF_ROOT/var/mountfix.log}"
+    log_dir=$(dirname "$log_file")
+    if [ -d "$log_dir" ] || mkdir -p "$log_dir" 2>/dev/null; then
+        printf '[%s] Deleted target directory %s/%s/%s (reclaimed %s)\n' \
+            "$(date '+%Y-%m-%d %H:%M:%S')" "$target_volume" "$DIR_APP_CENTRAL" "$app_name" "$reclaimed_human" >> "$log_file" 2>/dev/null || true
+    fi
+
+    release_transfer_lock "$$"
+
+    volumes_json=$(get_volumes_json 2>/dev/null || true)
+    esc_app=$(json_escape "$app_name")
+    esc_path=$(json_escape "${target_volume}/${DIR_APP_CENTRAL}/${app_name}")
+    esc_size=$(json_escape "$reclaimed_human")
+
+    printf '{"success": true, "message": "Deleted target copy of %s (reclaimed %s)", "app": "%s", "deletedPath": "%s", "reclaimedSize": "%s", "reclaimedSizeKb": %s, "volumes": [%s]}\n' \
+        "$esc_app" "$esc_size" "$esc_app" "$esc_path" "$esc_size" "$reclaimed_kb" "$volumes_json"
+    return 0
+}

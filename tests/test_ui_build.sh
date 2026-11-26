@@ -608,6 +608,124 @@ assert.strictEqual(dwUiState.startDisabled, false, 'Poll failure must re-enable 
 assert.strictEqual(dwUiState.stopDisabled, true, 'Poll failure must disable Stop button');
 assert.strictEqual(dwUiState.durDisabled, false, 'Poll failure must re-enable Duration combo');
 assert.strictEqual(dwUiState.colDisabled, false, 'Poll failure must re-enable Collector combo');
+
+// 24. Safe Delete Target UI: button gating, confirmation modal variants, and typing <app> unlock
+const delBtnStates = {};
+let delHint = '';
+const makeDelBtn = (id) => ({
+    setText() {},
+    setDisabled(v) { delBtnStates[id] = !!v; },
+    disable() { delBtnStates[id] = true; },
+});
+p = makePage();
+p.updateActionsUI = actionsProto.updateActionsUI;
+p.win.down = (sel) => {
+    if (sel === '#btnCopyToTarget') return makeDelBtn('copy');
+    if (sel === '#btnMount') return makeDelBtn('mount');
+    if (sel === '#btnUnmount') return makeDelBtn('unmount');
+    if (sel === '#btnSyncBack') return makeDelBtn('sync');
+    if (sel === '#btnDeleteTarget') return makeDelBtn('del');
+    if (sel === '#actionHint') return { update(h) { delHint = h; } };
+    return null;
+};
+
+// Stopped, unmounted, existsInTarget=true, NOT configured -> Delete target enabled
+p._validatingCount = 0;
+p.selectedApp = { get: (k) => (k === 'name' ? 'minidlna' : k === 'existsInTarget') };
+p.updateActionsUI();
+assert.strictEqual(delBtnStates.del, false, 'Delete target must be enabled for stopped, unmounted, unconfigured app with target copy');
+
+// Configured for boot -> Delete target disabled + hint explains unchecking Boot
+p.selectedApp = { get: (k) => (k === 'name' ? 'minidlna' : (k === 'existsInTarget' || k === 'configured')) };
+p.updateActionsUI();
+assert.strictEqual(delBtnStates.del, true, 'Delete target must be disabled when app is configured for boot');
+assert(delHint.includes('Boot') && delHint.includes('Apply'), 'actionHint must instruct unchecking Boot before deleting target');
+
+// Mounted -> Delete target disabled
+p.selectedApp = { get: (k) => (k === 'name' ? 'minidlna' : (k === 'existsInTarget' || k === 'mounted')) };
+p.updateActionsUI();
+assert.strictEqual(delBtnStates.del, true, 'Delete target must be disabled while mounted');
+
+// Running -> Delete target disabled
+p.selectedApp = { get: (k) => (k === 'name' ? 'minidlna' : (k === 'existsInTarget' || k === 'enabled')) };
+p.updateActionsUI();
+assert.strictEqual(delBtnStates.del, true, 'Delete target must be disabled while running');
+
+// In-sync preview opens subWindow with [Delete target, Cancel] locked until exact app name is typed
+createdDialogs = [];
+sandbox.Ext.ClassManager.isCreated = (cls) => cls === 'AS.ARC.subWindow' || cls === 'AS.ARC.msgWindow';
+const makeMockSubWindow = (cls, cfg) => {
+    const btnMap = {};
+    (cfg.fbar || []).forEach((b) => {
+        if (b.itemId) {
+            btnMap['#' + b.itemId] = {
+                disabled: !!b.disabled,
+                setDisabled(v) { this.disabled = !!v; },
+            };
+        }
+    });
+    const inst = {
+        cls,
+        cfg,
+        shown: false,
+        closed: false,
+        show() { this.shown = true; },
+        close() { this.closed = true; },
+        down(sel) { return btnMap[sel] || null; },
+        _btnMap: btnMap,
+    };
+    createdDialogs.push(inst);
+    return inst;
+};
+const origCreate = sandbox.Ext.create;
+sandbox.Ext.create = makeMockSubWindow;
+
+p = makePage();
+p.showDeleteTargetDialog('/volume2', 'minidlna', {
+    targetPath: '/volume2/AppCentral/minidlna',
+    targetSize: '42.0M',
+    hasDifferences: false,
+    hasHddOnly: false,
+    counts: { extraOnSsd: 0, modifiedOnSsd: 0, onlyOnHdd: 0 },
+    samples: [],
+});
+assert.strictEqual(createdDialogs.length, 1);
+assert.strictEqual(
+    createdDialogs[0].cfg.fbar.map((b) => b.text).join('|'),
+    'Delete target|Cancel',
+    'In-sync modal must show [Delete target, Cancel]',
+);
+const confirmField = createdDialogs[0].cfg.items[1].items[0];
+assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, true, 'Delete target must start disabled');
+confirmField.listeners.change(confirmField, 'minidln');
+assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, true, 'Partial app name must keep Delete target disabled');
+confirmField.listeners.change(confirmField, 'minidlna');
+assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, false, 'Exact app name must enable Delete target');
+
+// Diff preview opens subWindow with [Sync back & Delete target, Delete target only, Cancel]
+createdDialogs = [];
+p.showDeleteTargetDialog('/volume2', 'minidlna', {
+    targetPath: '/volume2/AppCentral/minidlna',
+    targetSize: '42.0M',
+    hasDifferences: true,
+    hasHddOnly: false,
+    totalChanges: 2,
+    counts: { extraOnSsd: 1, modifiedOnSsd: 1, onlyOnHdd: 0 },
+    samples: [{ change: 'extra_on_ssd', path: 'new.db' }],
+});
+assert.strictEqual(
+    createdDialogs[0].cfg.fbar.map((b) => b.text).join('|'),
+    'Sync back & Delete target|Delete target only|Cancel',
+    'Diff modal must show [Sync back & Delete target, Delete target only, Cancel]',
+);
+const diffField = createdDialogs[0].cfg.items[1].items[0];
+assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmSyncAndDelete'].disabled, true);
+assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, true);
+diffField.listeners.change(diffField, 'minidlna');
+assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmSyncAndDelete'].disabled, false);
+assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, false);
+
+sandbox.Ext.create = origCreate;
 EOF
 fi
 

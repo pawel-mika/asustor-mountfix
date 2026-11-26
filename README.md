@@ -54,6 +54,7 @@ MountFix distinguishes normal runtime stops from actual system power events via 
 | **Mount** | User clicks **Mount** | Verifies no processes hold the app directory (`pids_using_paths`), executes `mount --bind`, and atomically adds the app to `etc/mountfix.conf` and `etc/mounts.list`. |
 | **Unmount** | User clicks **Unmount** | Prompts for **Unmount & Sync-back** (recommended) or **Unmount only**. Detaches the bind mount and atomically removes the app from `etc/mountfix.conf` and `etc/mounts.list`. |
 | **Sync back** | User clicks **Sync back** (or **Unmount & Sync-back**) | Mirrors `<target>/AppCentral/<app>/` back to `/volume1/.@plugins/AppCentral/<app>/` using `--delete` (after explicit confirmation) so the HDD copy becomes identical to the SSD copy. |
+| **Delete target** | User clicks **Delete target** | Reclaims SSD space by permanently removing `<target>/AppCentral/<app>` only when the app is stopped, unmounted, and removed from boot config. Runs a read-only `rsync --dry-run` diff preview first, offers **Sync back & Delete target** when SSD differences exist, requires typing the exact app name, and refreshes volume free space. |
 | **Validation & mismatch warnings** | On window open, volume change, or after per-app actions | Non-blocking single-pass `du -sk` disk usage check + `stat -c %d:%i` mount verification. Flags any `configured != mounted` mismatch in the grid (`Mounted (not in boot)` / `Not mounted (in boot)`). Action buttons in **Options** are temporarily disabled while validation is in flight so actions never run against stale state. |
 | **Optional `sysctl` tuning** | At boot / `start-stop.sh start` (only if enabled) | Controlled by the **Apply kernel VM/writeback sysctl tuning on boot** checkbox (`enableSysctlTuning`, **off by default**). When enabled, logs previous values and sets `vm.swappiness=1`, `vm.vfs_cache_pressure=10`, `vm.dirty_writeback_centisecs=6000`, `vm.dirty_expire_centisecs=6000`. |
 | **Uninstall guard** | Package uninstall (`CONTROL/pre-uninstall.sh`) | Scans `/proc/mounts` and **blocks uninstall** (`exit 1`) if any AppCentral bind mount is still active, listing the mounted apps. |
@@ -66,7 +67,7 @@ MountFix distinguishes normal runtime stops from actual system power events via 
 
 - **Does not stop or start applications for you.** You must stop and start applications manually in AppCentral.
 - **Does not auto-sync-back** on shutdown, reboot, MountFix upgrade, or when you disable MountFix.
-- **Does not delete target folders** on the SSD automatically when you unmount an app (reclaiming SSD space is currently a manual step after verifying the app works on `/volume1`).
+- **Does not delete target folders** on the SSD automatically when you unmount an app (use the explicit **Delete target** action after verifying the app works on `/volume1`).
 - **Does not allow relocating `MountFix` itself** (blocked both in the UI and server-side).
 - **Does not allow selecting HDD volumes** as migration targets.
 - **Does not modify or restore `sysctl` on `stop`/shutdown.**
@@ -89,6 +90,7 @@ MountFix distinguishes normal runtime stops from actual system power events via 
 2. Open **MountFix**, select the application, and click **Unmount**.
 3. Choose **Unmount & Sync-back** so the latest SSD data is mirrored back to `/volume1`.
 4. Return to **AppCentral** and **start** the application.
+5. *(Optional)* Once verified on HDD, stop the app again and click **Delete target** in MountFix to inspect any remaining differences and reclaim SSD space.
 
 ---
 
@@ -144,7 +146,7 @@ The **HDD Monitor** tab helps you find out **which processes or AppCentral appli
 - **Local development & packaging:** Requires `jq`, `tar`, and `zip`.
   - `./build.sh` — packages the current version from `CONTROL/config.json` into `./out/` without dirtying tracked files.
   - `./build.sh --bump` — increments the revision in `CONTROL/config.json` before packaging.
-  - `./tests/run_all.sh` — runs all 8 behavioural and build verification test suites.
+  - `./tests/run_all.sh` — runs all 10 behavioural and build verification test suites.
 
 ---
 
@@ -157,6 +159,7 @@ The **HDD Monitor** tab helps you find out **which processes or AppCentral appli
   - `GET validate.cgi?act=get&target=VOL[&app=NAME]` — returns per-app mount state, `configured`/`mismatch` flags, and batched `du -sk` sizes.
   - `POST mount.cgi?act=mount|unmount&app=NAME&target=VOL` — binds/unbinds the app and atomically syncs boot configuration.
   - `POST migrate.cgi?act=migrate|sync_back&app=NAME&target=VOL[&force=1]` / `GET migrate.cgi?act=status` — starts or polls detached background `rsync` transfers protected by `/tmp/mountfix.lock`.
+  - `GET migrate.cgi?act=delete_preview&app=NAME&target=VOL` / `POST migrate.cgi?act=delete_target&app=NAME&target=VOL&confirm=NAME` — inspects SSD vs. HDD differences (`rsync --dry-run`) and safely removes `<target>/AppCentral/<app>` under `/tmp/mountfix.lock`.
   - `POST diskwatch.cgi?act=start&duration=SEC[&collector=MODE]` / `POST diskwatch.cgi?act=stop` / `GET diskwatch.cgi?act=status` — controls and polls the read-only HDD Activity Monitor (`30`s up to `43200`s / `12h`).
 - **Additional Documentation:**
   - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — internal IPC, transfer engine, lock protocol, and boot/shutdown lifecycle.

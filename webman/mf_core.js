@@ -244,6 +244,15 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                         fn.syncBackSelectedApp();
                                     },
                                 },
+                                {
+                                    xtype: 'button',
+                                    text: 'Delete target',
+                                    itemId: 'btnDeleteTarget',
+                                    margin: '0 0 0 8',
+                                    handler: function () {
+                                        fn.deleteSelectedAppTarget();
+                                    },
+                                },
                             ],
                         },
                         {

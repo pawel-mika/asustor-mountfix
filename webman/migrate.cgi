@@ -16,11 +16,13 @@ ACTION_RAW=$(get_query_param "${QUERY_STRING:-}" "act")
 TARGET_VOL_RAW=$(get_query_param "${QUERY_STRING:-}" "target")
 APP_PARAM_RAW=$(get_query_param "${QUERY_STRING:-}" "app")
 FORCE_RAW=$(get_query_param "${QUERY_STRING:-}" "force")
+CONFIRM_RAW=$(get_query_param "${QUERY_STRING:-}" "confirm")
 
 ACTION=$(url_decode "$ACTION_RAW")
 TARGET_VOL=$(url_decode "$TARGET_VOL_RAW")
 APP_PARAM=$(url_decode "$APP_PARAM_RAW")
 FORCE=$(url_decode "$FORCE_RAW")
+CONFIRM=$(url_decode "$CONFIRM_RAW")
 
 if [ "$ACTION" = "migrate" ]; then
     require_post_method
@@ -36,6 +38,21 @@ elif [ "$ACTION" = "sync_back" ]; then
         send_response true "\"result\": $RESPONSE"
     else
         [ -z "$RESPONSE" ] && RESPONSE='{"success": false, "error": "Sync back failed"}'
+        send_response false "\"result\": $RESPONSE"
+    fi
+elif [ "$ACTION" = "delete_preview" ]; then
+    if RESPONSE=$(preview_delete_target "$TARGET_VOL" "$APP_PARAM"); then
+        send_response true "\"result\": $RESPONSE"
+    else
+        [ -z "$RESPONSE" ] && RESPONSE='{"success": false, "error": "Delete preview failed"}'
+        send_response false "\"result\": $RESPONSE"
+    fi
+elif [ "$ACTION" = "delete_target" ]; then
+    require_post_method
+    if RESPONSE=$(delete_app_target "$TARGET_VOL" "$APP_PARAM" "$CONFIRM"); then
+        send_response true "\"result\": $RESPONSE"
+    else
+        [ -z "$RESPONSE" ] && RESPONSE='{"success": false, "error": "Delete target failed"}'
         send_response false "\"result\": $RESPONSE"
     fi
 elif [ "$ACTION" = "status" ]; then
