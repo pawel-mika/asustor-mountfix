@@ -63,6 +63,9 @@ cp -r CONTROL "$TEMP_FOLDER/"
 rm -f "$TEMP_FOLDER"/CONTROL/*.old
 cp -r webman "$TEMP_FOLDER/"
 cp -r etc "$TEMP_FOLDER/"
+if [ -d bin ]; then
+    cp -r bin "$TEMP_FOLDER/"
+fi
 
 # 2.1. Check & create out folder
 if [ ! -d "$OUT_FOLDER" ]; then

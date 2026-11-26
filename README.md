@@ -57,6 +57,7 @@ MountFix distinguishes normal runtime stops from actual system power events via 
 | **Validation & mismatch warnings** | On window open, volume change, or after per-app actions | Non-blocking single-pass `du -sk` disk usage check + `stat -c %d:%i` mount verification. Flags any `configured != mounted` mismatch in the grid (`Mounted (not in boot)` / `Not mounted (in boot)`). Action buttons in **Options** are temporarily disabled while validation is in flight so actions never run against stale state. |
 | **Optional `sysctl` tuning** | At boot / `start-stop.sh start` (only if enabled) | Controlled by the **Apply kernel VM/writeback sysctl tuning on boot** checkbox (`enableSysctlTuning`, **off by default**). When enabled, logs previous values and sets `vm.swappiness=1`, `vm.vfs_cache_pressure=10`, `vm.dirty_writeback_centisecs=6000`, `vm.dirty_expire_centisecs=6000`. |
 | **Uninstall guard** | Package uninstall (`CONTROL/pre-uninstall.sh`) | Scans `/proc/mounts` and **blocks uninstall** (`exit 1`) if any AppCentral bind mount is still active, listing the mounted apps. |
+| **HDD Activity Monitor** | User opens the **HDD Monitor** tab and clicks **Start** (`30s`–`12h`) | Runs a read-only background observer in `tmpfs` (`/tmp`) that tracks physical HDD `/proc/diskstats` deltas, queries drive power state via `hdparm -C` (without waking standby drives), and attributes I/O to processes and AppCentral packages using `iotop-static` (with automatic or selectable `/proc/<pid>/io` fallback) and `st_dev` correlation. |
 | **Security & logging** | Every CGI request & boot/shutdown | Every CGI verifies a valid ADM **administrator** session (`sid` via `admin.cgi`) and enforces `POST` on mutating endpoints. Boot/shutdown actions log to `var/mountfix.log` (auto-rotated) and emit warnings to ADM System Log. |
 
 ---
@@ -76,16 +77,55 @@ MountFix distinguishes normal runtime stops from actual system power events via 
 
 ### Relocating an Application (HDD → SSD)
 1. Open **AppCentral** and **stop** the target application.
-2. Open **MountFix**, select your SSD/NVMe **Target Volume**, and select the application row.
+2. Open **MountFix** (**App Relocation** tab), select your SSD/NVMe **Target Volume**, and select the application row.
 3. Click **Copy to target** and wait for `100%` completion.
 4. Click **Mount** (this mounts the app immediately and saves it to boot configuration automatically).
 5. Return to **AppCentral** and **start** the application.
+
+![MountFix App Relocation tab](docs/images/app-relocation.png)
 
 ### Moving an Application Back to HDD (SSD → HDD)
 1. Open **AppCentral** and **stop** the application.
 2. Open **MountFix**, select the application, and click **Unmount**.
 3. Choose **Unmount & Sync-back** so the latest SSD data is mirrored back to `/volume1`.
 4. Return to **AppCentral** and **start** the application.
+
+---
+
+## HDD Monitor — Diagnosing HDD Wakeups & Disk I/O
+
+The **HDD Monitor** tab helps you find out **which processes or AppCentral applications are still reading/writing to mechanical HDDs** (preventing disk hibernation/standby) and whether those apps can be relocated to SSD.
+
+### How It Works
+- **Read-only & zero HDD wakeups:** The background worker runs at low priority (`nice 10`) and keeps all locks, state files, and reports strictly in RAM (`tmpfs` under `/tmp`). Reading `/proc` and `/sys` never touches physical disks, and per-PID file-descriptor inspection runs *only* during samples where `/proc/diskstats` confirms physical HDD I/O occurred.
+- **Duration presets (`30s`–`12h`):** Adaptive sampling intervals (`1s` for `30s`–`1m`, `3s` for `5m`–`20m`, `5s` for `30m`–`1h`, and `10s` for `2h`–`12h`) keep CPU usage low even on overnight captures. You can close MountFix or your browser while a long capture runs and reopen it later to view live progress or the finished report.
+- **Selectable I/O collectors:**
+  - **Auto (`iotop-static`)** *(recommended)*: Uses the bundled static `x86-64` `iotop-c 1.31` binary (via Linux Netlink `taskstats`) for very low CPU overhead, kernel-thread I/O (`jbd2`), and better detection of short-lived processes. Automatically falls back to `/proc/io` if unavailable or on non-`x86-64` architectures.
+  - **`/proc/io (script)`**: Zero-dependency POSIX collector reading `/proc/<pid>/io` deltas + `D`-state.
+- **HDD vs. SSD separation:** Automatically discovers physical `rotational == 1` drives, their partitions, and rotational `md*` RAID arrays, then correlates active PIDs' open file descriptors (`st_dev`) against HDD mountpoints (`/` on `md0`, `/volume1` on `md1`, etc.) so SSD-only containers and apps are filtered out.
+
+### How to Interpret Results
+
+1. **Header status bar:**
+   - **HDD Power:** Drive power state from `hdparm -C` (updated on start, every ~60s on long captures, and on completion without waking standby drives) — `standby` (green) means spun down; `active/idle` (amber) means awake.
+   - **Physical HDD I/O & Wakeup events:** Total KB read/written across physical rotational disks and how many sampling intervals recorded HDD activity.
+2. **Summary (Top Culprits) tab:** Aggregates every process that touched HDD during the capture, sorted by hit count and I/O volume.
+
+   ![MountFix HDD Monitor Summary tab](docs/images/hdd-monitor-summary.png)
+
+   | Relocation Badge | Meaning | Recommended Action |
+   |---|---|---|
+   | **Still on HDD — can relocate** *(amber)* | AppCentral package currently running from `/volume1` HDD. | Switch to **App Relocation** to move it to SSD. |
+   | **Mounted on SSD** *(green)* | AppCentral package is already relocated to SSD, but accessed user files on an HDD share (e.g. `mc` from `entware` browsing `/volume1`). | Normal when accessing HDD data; no relocation needed. |
+   | **System / Kernel** *(gray)* | ADM system daemon (`logmand`, `lighttpd`) or kernel thread (`jbd2/md1-8` ext4 journal flush, `md1_raid*`). | Check Timeline to see what triggered the flush (often `md0`/`sd*2` system logs or `md1`/`sd*4` data writes). |
+
+3. **Timeline tab:** Chronological log (capped at the latest 200 events) showing exact timestamps, per-device `+R/+W` deltas, and active processes.
+
+   ![MountFix HDD Monitor Timeline tab](docs/images/hdd-monitor-timeline.png)
+
+   - **`sd*2` / `md0`** corresponds to ADM's system root partition (`/`).
+   - **`sd*4` / `md1`** corresponds to the primary HDD data volume (`/volume1`).
+   - **`(kernel/short-lived process)`** means either a kernel metadata/journal operation with no userspace I/O or a very short process that exited before the sample finished.
 
 ### Important Rules & Awareness
 - **Always stop the app first:** Attempting to copy, mount, unmount, or sync-back a running app is blocked by both the UI and the backend (`pids_using_paths` check) to prevent database or filesystem corruption.
@@ -117,6 +157,7 @@ MountFix distinguishes normal runtime stops from actual system power events via 
   - `GET validate.cgi?act=get&target=VOL[&app=NAME]` — returns per-app mount state, `configured`/`mismatch` flags, and batched `du -sk` sizes.
   - `POST mount.cgi?act=mount|unmount&app=NAME&target=VOL` — binds/unbinds the app and atomically syncs boot configuration.
   - `POST migrate.cgi?act=migrate|sync_back&app=NAME&target=VOL[&force=1]` / `GET migrate.cgi?act=status` — starts or polls detached background `rsync` transfers protected by `/tmp/mountfix.lock`.
+  - `POST diskwatch.cgi?act=start&duration=SEC[&collector=MODE]` / `POST diskwatch.cgi?act=stop` / `GET diskwatch.cgi?act=status` — controls and polls the read-only HDD Activity Monitor (`30`s up to `43200`s / `12h`).
 - **Additional Documentation:**
   - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — internal IPC, transfer engine, lock protocol, and boot/shutdown lifecycle.
   - [docs/TECHNICAL-REVIEW.md](docs/TECHNICAL-REVIEW.md) — full security/reliability audit, ADM 5.1.5 field verification, and Stage 1–2 implementation history.

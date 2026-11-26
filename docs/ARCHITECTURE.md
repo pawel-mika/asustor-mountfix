@@ -210,7 +210,18 @@ ADM enforces a 60-second per-script shutdown timeout (`/etc/script/script_trap.s
 
 ---
 
-## 5. Additional Architecture Topics
+## 5. HDD Activity Monitor (`diskwatch.cgi` / `diskwatch.sh`)
+
+MountFix includes a read-only background observer (`webman/scripts/diskwatch.sh`, controlled by `webman/diskwatch.cgi` and rendered in the **HDD Monitor** tab via `webman/mf_diskwatch.js`) for diagnosing mechanical HDD wakeups:
+
+- **Zero HDD footprint:** Lock (`/tmp/mountfix_diskwatch.lock`), work directory (`/tmp/mountfix_diskwatch.state`), and atomic JSON report (`/tmp/mountfix_diskwatch.status.json`) live exclusively in `tmpfs` (`/tmp`).
+- **Dynamic HDD discovery:** Detects `rotational == 1` physical base disks, their partitions, rotational `md*` arrays, and all `/proc/mounts` mountpoints backed by those devices (including `/` on `md0` and `/volume1` on `md1`), while excluding NVMe/SSD and virtual devices.
+- **Dual collector & adaptive intervals:** Supports `30s`–`12h` whitelisted durations (`1s` / `3s` / `5s` / `10s` intervals) and selectable `auto` / `iotop-static` (`bin/iotop-static`, `iotop-c 1.31` invoked with `-b -o -P -k -d <interval> -n 2 -q` under BusyBox `timeout`) / `proc-io` (`/proc/[0-9]*/io` deltas + `D`-state) collectors.
+- **Attribution & JSON safety:** On physical `/proc/diskstats` deltas, active PIDs are correlated against HDD `st_dev` (capped at 32 non-virtual FDs with early exit) and checked against `etc/mounts.list` (`hdd_relocatable` vs `ssd_mounted` vs `system`). Status JSON is serialized directly in `awk -F'\t'` (preventing POSIX `IFS` tab-collapsing on empty `appName` fields) with a 200-entry timeline ring buffer and automatic `jq -e` self-healing on read.
+
+---
+
+## 6. Additional Architecture Topics
 
 For full audit history, field findings, and the post-Stage 2 backlog (*Delete target* workflow), see [docs/TECHNICAL-REVIEW.md](TECHNICAL-REVIEW.md) and [IDEAS.md](../IDEAS.md).
 

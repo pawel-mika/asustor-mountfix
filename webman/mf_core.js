@@ -3,13 +3,15 @@
  */
 Ext.define('AS.ARC.apps.MountFix.core', {
     extend: 'Ext.util.Observable',
-    mixins: ['AS.ARC.apps.MountFix.Actions'],
+    mixins: ['AS.ARC.apps.MountFix.Actions', 'AS.ARC.apps.MountFix.Diskwatch'],
 
     constructor: function (config) {
         Ext.apply(this, config);
         this.maskStack = [];
         this._pollTimer = null;
         this._pollActive = false;
+        this._dwPollTimer = null;
+        this._dwPollActive = false;
         this._statusFadeTimer = null;
         this._validatingCount = 0;
         this.callParent();
@@ -25,9 +27,10 @@ Ext.define('AS.ARC.apps.MountFix.core', {
             data: [],
         });
 
-        // Main form panel (window base)
+        // Main form panel (Tab 1: App Relocation)
         var mainPanel = Ext.create('AS.ARC.formBase', {
             itemId: 'mainPanel',
+            title: 'App Relocation',
             cls: 'as-page-panel',
             border: false,
             // Change layout to vbox to manage vertical space
@@ -318,6 +321,22 @@ Ext.define('AS.ARC.apps.MountFix.core', {
         var winHeight = Math.max(540, Math.min(Math.floor(vh * 0.8), vh - 90));
         var winWidth = Math.max(760, Math.min(Math.floor(vw * 0.78), 1020));
 
+        // Top-level tabs: App Relocation + HDD Monitor
+        var diskwatchPanel = fn.createDiskwatchPanel();
+        var mainTabPanel = Ext.create('Ext.tab.Panel', {
+            itemId: 'mfTabPanel',
+            border: false,
+            activeTab: 0,
+            items: [mainPanel, diskwatchPanel],
+            listeners: {
+                tabchange: function (tp, newCard) {
+                    if (newCard && newCard.itemId === 'diskwatchPanel') {
+                        fn.refreshDiskwatchStatus(false);
+                    }
+                },
+            },
+        });
+
         // Creating window through ADM desktop
         this.win = this.desktop.createWindow({
             app: fn.app,
@@ -338,7 +357,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                     },
                 },
             ],
-            items: [mainPanel],
+            items: [mainTabPanel],
         });
 
         // Attach via win.on() so AS.ARC.appWindow.prototype.listeners (Ps scrollbars, resize, focus) is preserved
@@ -347,6 +366,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
         });
         this.win.on('beforeclose', function () {
             fn.stopMigrationMonitor();
+            fn.stopDiskwatchPolling();
             if (fn._statusFadeTimer) {
                 clearTimeout(fn._statusFadeTimer);
                 fn._statusFadeTimer = null;

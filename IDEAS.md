@@ -81,7 +81,9 @@ Allow users to reclaim space on the target SSD volume by deleting `<target>/AppC
 
 ---
 
-## 3. HDD Wakeup & I/O Diagnostics ("What's Waking My HDD?") (Future Feature)
+## 3. HDD Wakeup & I/O Diagnostics ("What's Waking My HDD?")
+
+> **Status:** **Implemented** as the **HDD Monitor** tab (`webman/mf_diskwatch.js`, `webman/diskwatch.cgi`, `webman/scripts/diskwatch.sh`, `tests/test_diskwatch.sh`) with duration presets `30s`–`12h` (`30s`, `1m`, `5m`, `10m`, `20m`, `30m`, `45m`, `1h`, `2h`, `3h`, `4h`, `6h`, `8h`, `12h`), selectable `Auto` / `iotop-static` (`1.31`) / `/proc/<pid>/io` collector, `st_dev` HDD vs. SSD attribution, and `Summary` + `Timeline` views.
 
 ### 3.1 Goal
 Help the user identify **which processes or AppCentral packages are still reading/writing to mechanical HDD volumes** (e.g. `/volume1`) so they can either relocate those apps to SSD with MountFix or diagnose why drives fail to enter hibernation/standby.

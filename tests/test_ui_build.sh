@@ -42,7 +42,15 @@ if grep -qF "btnHelp" webman/mountfix.js; then
 fi
 AJAX_CALLS=$(grep -c "AS\.ARC\.ajax({" webman/mf_actions.js)
 FAILURE_RET=$(grep -c "enableFailureReturn: true" webman/mf_actions.js)
-[ "$AJAX_CALLS" -eq "$FAILURE_RET" ] || { echo "FAIL: every AS.ARC.ajax call must set enableFailureReturn: true ($FAILURE_RET/$AJAX_CALLS)"; exit 1; }
+[ "$AJAX_CALLS" -eq "$FAILURE_RET" ] || { echo "FAIL: every AS.ARC.ajax call in mf_actions.js must set enableFailureReturn: true ($FAILURE_RET/$AJAX_CALLS)"; exit 1; }
+
+DW_AJAX_CALLS=$(grep -c "AS\.ARC\.ajax({" webman/mf_diskwatch.js)
+DW_FAILURE_RET=$(grep -c "enableFailureReturn: true" webman/mf_diskwatch.js)
+[ "$DW_AJAX_CALLS" -eq "$DW_FAILURE_RET" ] || { echo "FAIL: every AS.ARC.ajax call in mf_diskwatch.js must set enableFailureReturn: true ($DW_FAILURE_RET/$DW_AJAX_CALLS)"; exit 1; }
+
+grep -q "stopDiskwatchPolling" webman/mountfix.js || { echo "FAIL: stopDiskwatchPolling missing from mountfix.js"; exit 1; }
+grep -q "HDD Monitor" webman/mountfix.js || { echo "FAIL: HDD Monitor tab missing from mountfix.js"; exit 1; }
+grep -q "value: 3600" webman/mountfix.js || { echo "FAIL: 1h duration preset missing from mountfix.js"; exit 1; }
 
 # Check that Target Directory Exists prompt helper is present and used on failure/success
 grep -q "promptTargetExists" webman/mountfix.js || { echo "FAIL: promptTargetExists missing from mountfix.js"; exit 1; }
@@ -497,6 +505,109 @@ assert.strictEqual(p._validatingCount, 0, '_validatingCount must decrement on va
 assert.strictEqual(btnStates.copy, false, 'Copy must re-enable after validate finishes for stopped unmounted app');
 assert.strictEqual(btnStates.mount, false, 'Mount must re-enable after validate finishes when existsInTarget=true');
 sandbox.AS.ARC.ajax = origAjax;
+
+// 23. MountFix.Diskwatch unit tests (formatting, 30s..12h presets, polling lifecycle, and failure recovery)
+let dwProto = null;
+const dwSandbox = Object.assign({}, sandbox, {
+    Ext: Object.assign({}, sandbox.Ext, {
+        isArray: Array.isArray,
+        define: (name, proto) => { dwProto = proto; },
+        create: (cls, cfg) => ({ cls, cfg, data: (cfg && cfg.data) || [] }),
+    }),
+});
+vm.runInNewContext(fs.readFileSync('webman/mf_diskwatch.js', 'utf8'), dwSandbox);
+assert(dwProto, 'MountFix.Diskwatch definition not captured');
+
+assert.strictEqual(dwProto.formatDwSeconds(45, false), '00:45');
+assert.strictEqual(dwProto.formatDwSeconds(300, false), '05:00');
+assert.strictEqual(dwProto.formatDwSeconds(65, true), '00:01:05');
+assert.strictEqual(dwProto.formatDwSeconds(3600, false), '01:00:00');
+assert.strictEqual(dwProto.formatDwSeconds(43200, true), '12:00:00');
+assert(dwProto.formatDwKb(0).includes('—'));
+assert.strictEqual(dwProto.formatDwKb(512), '512K');
+assert.strictEqual(dwProto.formatDwKb(2048), '2.0M');
+assert.strictEqual(dwProto.formatDwKb(2097152), '2.0G');
+
+const panelCfg = dwProto.createDiskwatchPanel.call(dwProto);
+const durComboCfg = panelCfg.items[0].items[0].items[0];
+const durValues = Array.from(durComboCfg.store.data, (d) => d.value);
+assert.deepStrictEqual(
+    durValues,
+    [30, 60, 300, 600, 1200, 1800, 2700, 3600, 7200, 10800, 14400, 21600, 28800, 43200],
+    'Duration store must contain exact 30s..12h presets without 5s',
+);
+
+const dwUiState = {
+    startDisabled: false,
+    stopDisabled: true,
+    durDisabled: false,
+    colDisabled: false,
+    progressHtml: '',
+    badgeHtml: '',
+    summaryHtml: '',
+    culprits: [],
+    timeline: [],
+};
+function makeDwPage() {
+    return Object.assign({}, dwProto, {
+        _dwPollTimer: null,
+        _dwPollActive: false,
+        updateStatus() {},
+        win: {
+            isDestroyed: false,
+            down: (sel) => {
+                if (sel === '#dwDuration') return { getValue: () => 43200, setDisabled: (v) => { dwUiState.durDisabled = v; } };
+                if (sel === '#dwCollector') return { getValue: () => 'iotop-static', setDisabled: (v) => { dwUiState.colDisabled = v; } };
+                if (sel === '#btnDwStart') return { setDisabled: (v) => { dwUiState.startDisabled = v; } };
+                if (sel === '#btnDwStop') return { setDisabled: (v) => { dwUiState.stopDisabled = v; } };
+                if (sel === '#dwProgressText') return { update: (h) => { dwUiState.progressHtml = h; } };
+                if (sel === '#dwCollectorBadge') return { update: (h) => { dwUiState.badgeHtml = h; } };
+                if (sel === '#dwHddSummary') return { update: (h) => { dwUiState.summaryHtml = h; } };
+                if (sel === '#dwCulpritsGrid') return { getStore: () => ({ loadData: (d) => { dwUiState.culprits = d; } }) };
+                if (sel === '#dwTimelineGrid') return { getStore: () => ({ loadData: (d) => { dwUiState.timeline = d; } }) };
+                return null;
+            },
+        },
+    });
+}
+
+timeoutCallbacks = [];
+const dwPage = makeDwPage();
+nextAjaxResponse = {
+    success: true,
+    result: {
+        state: 'running',
+        collector: 'iotop-static',
+        duration: 43200,
+        interval: 10,
+        elapsed: 3661,
+        hddPower: [{ disk: 'sda', state: 'standby' }],
+        hddReadKB: 1024,
+        hddWriteKB: 0,
+        eventCount: 1,
+        culprits: [{ process: 'mc', appName: 'entware', relocationStatus: 'ssd_mounted' }],
+        timeline: [{ time: '11:00:00', devices: 'sda(+1024K/+0K)', processes: 'mc' }],
+    },
+};
+dwPage.startDiskwatchCapture();
+assert.strictEqual(dwUiState.startDisabled, true, 'Start must be disabled while running');
+assert.strictEqual(dwUiState.stopDisabled, false, 'Stop must be enabled while running');
+assert(dwUiState.progressHtml.includes('01:01:01 / 12:00:00'), '12h progress must use HH:MM:SS format');
+assert.strictEqual(timeoutCallbacks.length, 1, 'Running state must schedule 2s poll');
+
+// Simulate AJAX failure during poll -> must stop polling and re-enable controls
+let forceFailure = false;
+dwSandbox.AS.ARC.ajax = (opts) => {
+    if (forceFailure) opts.failure && opts.failure({});
+    else origAjax(opts);
+};
+forceFailure = true;
+timeoutCallbacks[0]();
+assert.strictEqual(dwPage._dwPollActive, false, 'Poll failure must stop polling');
+assert.strictEqual(dwUiState.startDisabled, false, 'Poll failure must re-enable Start button');
+assert.strictEqual(dwUiState.stopDisabled, true, 'Poll failure must disable Stop button');
+assert.strictEqual(dwUiState.durDisabled, false, 'Poll failure must re-enable Duration combo');
+assert.strictEqual(dwUiState.colDisabled, false, 'Poll failure must re-enable Collector combo');
 EOF
 fi
 

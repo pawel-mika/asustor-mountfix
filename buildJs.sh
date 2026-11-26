@@ -15,6 +15,7 @@ build_js() {
 
     local JS_FILES=(
         "mf_actions.js"
+        "mf_diskwatch.js"
         "mf_core.js"
         "mf_main.js"
     )
