@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Date** | 2026-11-19 (updated 2026-11-25) |
-| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 implemented & verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branch 1 implemented in `0.0.0.106` (installed on NAS, see §8); Stage 2 Branch 2 implemented in `0.0.0.107` (`fix/transfer-engine`, see §9); Stage 2 Branch 3 implemented & verified on NAS in `0.0.0.108`–`0.0.0.115` (`fix/ui-state-and-validation`, see §10); Stage 2 Branch 4 implemented (`chore/lifecycle-and-repo-hygiene`, see §11) |
-| **Scope** | Whole repository: `CONTROL/`, `webman/` (CGI + shell library + ExtJS UI), `build.sh` / `buildJs.sh`, `tests/`, `etc/` |
-| **Status** | **Stage 1 & Stage 2 complete.** All audit findings `F1`–`F17` resolved across Branches 1–4 (`0.0.0.103`–`0.0.0.115` + `chore/lifecycle-and-repo-hygiene`, see §8–§11). **Remaining backlog (Post-Stage 2):** Safe *Delete target* workflow (`IDEAS.md` §2) and optional `validate.cgi` Approaches C / D.2 (`IDEAS.md` §1). |
+| **Date** | 2026-11-19 (updated 2026-11-26) |
+| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branches 1–4 verified in `0.0.0.106`–`0.0.0.123`; Post-Stage 2 **HDD Activity Monitor** implemented & verified on NAS in `0.0.0.124`–`0.0.0.130` (`7915442`, see §12) |
+| **Scope** | Whole repository: `CONTROL/`, `webman/` (CGI + shell library + ExtJS UI), `bin/`, `build.sh` / `buildJs.sh`, `tests/`, `etc/` |
+| **Status** | **Stage 1, Stage 2, and Post-Stage 2 HDD Activity Monitor (`IDEAS.md` §3) complete & verified on ADM 5.1.5.** All audit findings `F1`–`F17` resolved (§8–§11). **Remaining backlog:** Safe *Delete target* workflow (`IDEAS.md` §2) and optional `validate.cgi` Approaches C / D.2 (`IDEAS.md` §1). |
 
 ---
 
@@ -638,5 +638,22 @@ Inspected directly against ADM 5.1.5 (`portal/build/launcherBuild.js`, `portal/a
 
 ### 11.2 Open items (Post-Stage 2)
 
-- **Live NAS verification:** Install `0.0.0.120` on ADM 5.1.5 (hard-refresh browser) and verify the `?` titlebar icon, scrollable *MountFix Quick Guide*, `enableSysctlTuning` checkbox, and `pre-uninstall.sh` / `pre-install.sh` hooks.
+- **Live NAS verification:** Verified on ADM 5.1.5 (`0.0.0.123`–`0.0.0.130`).
 - **Post-Stage 2 (`IDEAS.md` §2):** Safe *Delete target* workflow.
+
+---
+
+## 12. Post-Stage 2 — HDD Activity Monitor (`0.0.0.124`–`0.0.0.130`, `7915442`)
+
+Implemented the read-only **HDD Activity Monitor** (`IDEAS.md` §3) as a second top-level tab (**HDD Monitor**) inside MountFix, verified across 9/9 automated test suites (`tests/test_diskwatch.sh`, `tests/test_ui_build.sh`) and live on ASUSTOR AS5304T (ADM 5.1.5):
+
+- **Single POSIX worker (`webman/scripts/diskwatch.sh`) + secured CGI (`webman/diskwatch.cgi`):** All locks, state, and atomic JSON status live strictly in `tmpfs` (`/tmp`). Enforces `require_adm_session`, `POST` on `start`/`stop`, and strict whitelists for `duration` (`30s`–`12h` with adaptive `1s`/`3s`/`5s`/`10s` intervals) and `collector` (`auto`, `iotop-static`, `proc-io`).
+- **Bundled `bin/iotop-static` (`iotop-c 1.31`, `x86-64`) + automatic `/proc/io` fallback:** Packaged by `build.sh` when `bin/` exists; falls back cleanly to `/proc/[0-9]*/io` on non-`x86-64` hosts or failed probes.
+- **UI & documentation:** Added `webman/mf_diskwatch.js` (*Summary* + *Timeline*, `HH:MM:SS` formatting for `>= 1h`, collector selector, 60s periodic `hdparm -C` standby/active refresh, failure recovery) and live ADM screenshots in `docs/images/` embedded in `README.md`.
+
+### 12.1 Field findings resolved during live ADM 5.1.5 verification
+
+- **`iotop-c 1.31` requires `-n 2` for batch deltas:** `-n 1` emits only the initial `0.00 K/s` baseline and exits immediately without waiting `-d <interval>`. Using `-n 2 -d <interval>` under BusyBox `timeout` captures real per-process deltas across the full interval.
+- **POSIX `IFS='\t'` collapses consecutive tabs (`\t\t`):** When a non-AppCentral process (`jbd2/md1-8`, `logmand`) had an empty `appName` column in TSV, `while IFS='\t' read` shifted columns left and produced invalid JSON (`"dState":11:10:40`). Rewrote JSON serialization in pure `awk -F'\t'` (with `%d` numeric coercion and `ENVIRON` string passing in `_diskwatch_merge_culprit`) plus `jq -e` self-healing on status reads.
+- **System root RAID (`md0` / `/`) & relocated app attribution:** Extended `discover_hdd_devices` to include all `/proc/mounts` mountpoints backed by rotational HDDs (not only `/volume[0-9]*`), capped per-PID FD inspection at 32 non-virtual FDs with early exit, and checked `etc/mounts.list` so already-relocated apps (e.g. `entware` `mc` browsing `/volume1`) display `Mounted on SSD` rather than `Still on HDD — can relocate`.
+- **ExtJS 4 `fieldset` + `hbox` height collapse:** Replaced `layout: 'vbox'` on the controls `fieldset` with `layout: 'anchor'` and explicit `height: 32` on the `hbox` `fieldcontainer`.
