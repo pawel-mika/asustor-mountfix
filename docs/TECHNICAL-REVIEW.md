@@ -5,7 +5,7 @@
 | **Date** | 2026-11-19 (updated 2026-11-26) |
 | **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branches 1–4 verified in `0.0.0.106`–`0.0.0.123`; Post-Stage 2 **HDD Activity Monitor** verified on NAS in `0.0.0.124`–`0.0.0.130` (`7915442`, see §12); Post-Stage 2 **Safe "Delete Target" Workflow** & **ADM 5.1.5 UI Guidelines** implemented in `0.0.0.131`–`0.0.0.134` (`5d4b9d2`–`a5e6cce`, see §13) |
 | **Scope** | Whole repository: `CONTROL/`, `webman/` (CGI + shell library + ExtJS UI), `bin/`, `build.sh` / `buildJs.sh`, `tests/`, `etc/` |
-| **Status** | **Stage 1, Stage 2, HDD Activity Monitor (`IDEAS.md` §3), and Safe *Delete Target* (`IDEAS.md` §2) complete.** All audit findings `F1`–`F17` resolved (§8–§11). **Remaining optional backlog:** `validate.cgi` Approaches C / D.2 (`IDEAS.md` §1). |
+| **Status** | **Stage 1, Stage 2, HDD Activity Monitor (`IDEAS.md` §3), Safe *Delete Target* (`IDEAS.md` §2), and `validate.cgi` C/D.2 + live transfer progress fix (§14) complete.** All audit findings `F1`–`F17` and all `IDEAS.md` §1–§3 proposals resolved. |
 
 ---
 
@@ -671,3 +671,17 @@ Implemented the **Safe "Delete Target" Workflow** (`IDEAS.md` §2) across backen
   - Added `#btnDeleteTarget` to the **Options** toolbar (disabled unless stopped, unmounted, not configured for boot, `existsInTarget`, and not validating) and an `AS.ARC.subWindow` confirmation modal offering `[Delete target | Cancel]` when in sync or `[Sync back & Delete target | Delete target only | Cancel]` when differences exist.
   - **Live ADM 5.1.5 discovery (`adm3.css`):** Direct `layout: 'vbox'` on `AS.ARC.subWindow` pushes secondary children onto `fbar`, and `adm3.css` globally hides all raw `<input type="checkbox">` (`display: none;`) while drawing ADM's themed 16×16 sprite on `input[type="checkbox"] + label span`. Fixed by using `layout: 'fit'` with a single `autoScroll: true` panel and ADM's sibling `<input type="checkbox" id="..."><label for="..."><span></span><div>...</div></label>` markup.
   - Captured all verified ADM 5.1.5 ExtJS/CSS rules in `docs/ADM-UI-GUIDELINES.md` (`a5e6cce`) and added `.adm-ref/` to `.gitignore` for optional local-only reference copies.
+
+---
+
+## 14. Post-Stage 2 — Two-Tier `validate.cgi` Caching, Optimistic UI & Live Transfer Progress Fix
+
+Completed the remaining optional `IDEAS.md` §1 items (Approaches **C** and **D.2**), fixed a live transfer progress regression, and documented HDD-only NAS usage:
+
+- **Two-tier `validate.cgi` & `tmpfs` size cache (`IDEAS.md` §1 C):** Added `mode=fast` (zero `du` calls, `< 50 ms` mount/config/mismatch response) and `mode=sizes` (backed by atomic `/tmp/mountfix_sizes.cache` with 10-minute TTL, `refresh=1` bypass, and automatic invalidation on completed `rsync` transfer or `delete_target`), keeping `mode=full` as the backward-compatible default.
+- **Frontend two-tier `validate()`, manual Refresh & optimistic UI (`IDEAS.md` §1 C / D.2):** `mf_actions.js` now runs `mode=fast` first to unlock action buttons immediately, then populates sizes in the background via `mode=sizes` (guarded by monotonic `_validateSeq`). Added `#btnRefresh` next to the Target Volume selector to force `refresh=1`. `bindMountAction()` and `executeDeleteTarget()` update the ExtJS grid record optimistically before silent reconciliation.
+- **Live transfer progress bugfix:**
+  1. Switched `detect_rsync_flags()` from `--outbuf=L` to `--outbuf=N` — `rsync --info=progress2` emits `\r` (not `\n`), so `--outbuf=L` buffered progress in memory until exit.
+  2. Made `_stream_rsync_progress()` unbuffered across GNU (`stdbuf -i0 -o0 tr`), BSD (`tr -u`), and BusyBox (`tr` + POSIX `read`) pipelines.
+  3. Updated `monitorMigrationStatus()` to update both the active mask text (`updateMaskMessage()`) and persistent footer `#statusInfo` (`persist: true`) with live `%` and transfer rate (`formatTransferProgress()`).
+- **HDD-only NAS guidance:** Added clear notes in `CONTROL/description.txt`, `README.md`, and the in-app *MountFix Quick Guide* explaining that the read-only **HDD Monitor** tab is useful even on HDD-only NAS systems without an SSD.

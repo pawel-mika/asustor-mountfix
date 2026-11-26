@@ -629,7 +629,13 @@ unmount_app() {
 
 STATUS_FILE="${STATUS_FILE:-/tmp/mountfix_transfer.status}"
 TRANSFER_LOCK_DIR="${TRANSFER_LOCK_DIR:-/tmp/mountfix.lock}"
+SIZES_CACHE_FILE="${SIZES_CACHE_FILE:-${TMPDIR:-/tmp}/mountfix_sizes.cache}"
+SIZES_CACHE_TTL="${SIZES_CACHE_TTL:-600}"
 RSYNC_BIN="${RSYNC_BIN:-rsync}"
+
+invalidate_sizes_cache() {
+    rm -f "$SIZES_CACHE_FILE" 2>/dev/null || true
+}
 
 ####################################################################
 # Atomic directory-based transfer mutex with stale-lock recovery
@@ -707,19 +713,20 @@ _write_status_atomic() {
 }
 
 _stream_rsync_progress() {
+    local line tab
+    tab=$(printf '\t')
     if command -v stdbuf >/dev/null 2>&1; then
-        stdbuf -oL tr '\r' '\n' | awk '/[^ \t]/ { print; fflush() }'
+        stdbuf -i0 -o0 tr '\r' '\n'
+    elif tr -u '' '' </dev/null >/dev/null 2>&1; then
+        tr -u '\r' '\n'
     else
-        awk 'BEGIN { RS = "\r" } {
-            n = split($0, lines, "\n")
-            for (i = 1; i <= n; i++) {
-                if (lines[i] ~ /[^ \t]/) {
-                    print lines[i]
-                    fflush()
-                }
-            }
-        }'
-    fi
+        # BusyBox tr uses unbuffered read()/full_write() syscalls
+        tr '\r' '\n'
+    fi | while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            *[!" $tab"]*) printf '%s\n' "$line" ;;
+        esac
+    done
 }
 
 ####################################################################
@@ -771,7 +778,8 @@ detect_rsync_flags() {
     done
 
     if printf '%s\n' "$help_out" | grep -q -- '--outbuf'; then
-        flags="$flags --outbuf=L"
+        # --info=progress2 emits CR (\r), not LF (\n); --outbuf=L buffers until exit
+        flags="$flags --outbuf=N"
     fi
 
     printf '%s\n' "$flags"
@@ -836,6 +844,7 @@ _launch_rsync_transfer() {
         rsync_status=$?
 
         if [ "$rsync_status" -eq 0 ]; then
+            invalidate_sizes_cache
             _write_status_atomic "$app_name" "DONE | 100% | Completed"
         else
             _write_status_atomic "$app_name" "ERROR | ${fail_prefix} (exit code: ${rsync_status})"
@@ -1353,6 +1362,7 @@ delete_app_target() {
     fi
 
     release_transfer_lock "$$"
+    invalidate_sizes_cache
 
     volumes_json=$(get_volumes_json 2>/dev/null || true)
     esc_app=$(json_escape "$app_name")

@@ -158,54 +158,135 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         });
     },
 
-    validate: function (appName, silent) {
+    applyValidatedApps: function (apps) {
+        if (!apps || !apps.length) return;
+        var grid = this.win && this.win.down('#appGrid');
+        if (!grid || !grid.getStore) return;
+        var store = grid.getStore();
+        apps.forEach(function (app) {
+            var updateData = Ext.apply({}, app);
+            if (typeof app.configured === 'boolean') {
+                updateData.selected = app.configured;
+            }
+            var record = store.findRecord('name', app.name, 0, false, false, true);
+            if (record) {
+                record.set(updateData);
+                if (record.commit) {
+                    record.commit();
+                }
+            } else {
+                store.add(updateData);
+            }
+        });
+    },
+
+    validate: function (appName, silent, options) {
         var page = this;
+        var opts = options || {};
+        var forceRefresh = !!opts.forceRefresh;
         var target = page.getSelectedVolume();
-        var params = {
-            act: 'get',
-            target: target,
-        };
+
+        // Targeted single-app validation (fast ~50-100ms, or <20ms with mode='fast')
         if (appName) {
-            params.app = appName;
+            var singleParams = {
+                act: 'get',
+                target: target,
+                app: appName,
+            };
+            if (opts.mode) {
+                singleParams.mode = opts.mode;
+            }
+            if (!silent) {
+                page.updateStatus('Validating ' + appName + '...', false, true);
+            }
+
+            page._validatingCount = (page._validatingCount || 0) + 1;
+            page.updateActionsUI();
+
+            AS.ARC.ajax({
+                url: AS.ARC.util.getApiUrlWithSid(page.validateApiUrl, singleParams),
+                method: 'GET',
+                enableFailureReturn: true,
+                success: function (json) {
+                    page._validatingCount = Math.max(0, (page._validatingCount || 1) - 1);
+                    if (json && json.success && json.apps) {
+                        page.applyValidatedApps(json.apps);
+                    }
+                    page.updateActionsUI();
+                    if (!silent) {
+                        page.updateStatus('', false);
+                    }
+                },
+                failure: function () {
+                    page._validatingCount = Math.max(0, (page._validatingCount || 1) - 1);
+                    page.updateActionsUI();
+                    page.updateStatus('Error: Failed to load validation data', true);
+                },
+            });
+            return;
         }
+
+        // Full sweep: Tier 1 (mode=fast, zero du) unlocks actions immediately; Tier 2 (mode=sizes, cached/batched) fills sizes in background
+        var seq = (page._validateSeq = (page._validateSeq || 0) + 1);
         if (!silent) {
-            page.updateStatus('Validating' + (appName ? ' ' + appName : '') + '...', false, true);
+            page.updateStatus('Validating...', false, true);
         }
 
         page._validatingCount = (page._validatingCount || 0) + 1;
         page.updateActionsUI();
 
         AS.ARC.ajax({
-            url: AS.ARC.util.getApiUrlWithSid(page.validateApiUrl, params),
+            url: AS.ARC.util.getApiUrlWithSid(page.validateApiUrl, {
+                act: 'get',
+                target: target,
+                mode: 'fast',
+            }),
             method: 'GET',
             enableFailureReturn: true,
             success: function (json) {
                 page._validatingCount = Math.max(0, (page._validatingCount || 1) - 1);
-                if (json.success && json.apps) {
-                    var grid = page.win.down('#appGrid');
-                    if (grid) {
-                        var store = grid.getStore();
-                        json.apps.forEach(function (app) {
-                            var updateData = Ext.apply({}, app);
-                            if (typeof app.configured === 'boolean') {
-                                updateData.selected = app.configured;
-                            }
-                            var record = store.findRecord('name', app.name, 0, false, false, true);
-                            if (record) {
-                                record.set(updateData);
-                                if (record.commit) {
-                                    record.commit();
-                                }
-                            } else {
-                                store.add(updateData);
-                            }
-                        });
-                    }
+                if (seq !== page._validateSeq) {
+                    page.updateActionsUI();
+                    return;
+                }
+                if (json && json.success && json.apps) {
+                    page.applyValidatedApps(json.apps);
                 }
                 page.updateActionsUI();
-                if (!silent) {
-                    page.updateStatus('', false);
+
+                var sizeParams = {
+                    act: 'get',
+                    target: target,
+                    mode: 'sizes',
+                };
+                if (forceRefresh) {
+                    sizeParams.refresh = '1';
                 }
+                if (!silent) {
+                    page.updateStatus(forceRefresh ? 'Refreshing sizes...' : 'Loading sizes...', false, true);
+                }
+
+                AS.ARC.ajax({
+                    url: AS.ARC.util.getApiUrlWithSid(page.validateApiUrl, sizeParams),
+                    method: 'GET',
+                    enableFailureReturn: true,
+                    success: function (sizeJson) {
+                        if (seq !== page._validateSeq) {
+                            return;
+                        }
+                        if (sizeJson && sizeJson.success && sizeJson.apps) {
+                            page.applyValidatedApps(sizeJson.apps);
+                        }
+                        if (!silent) {
+                            page.updateStatus('', false);
+                        }
+                    },
+                    failure: function () {
+                        if (seq === page._validateSeq && !silent) {
+                            page.updateStatus('', false);
+                        }
+                    },
+                });
             },
             failure: function () {
                 page._validatingCount = Math.max(0, (page._validatingCount || 1) - 1);
@@ -426,7 +507,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 }
                 if (json && json.success && (res.success || res.success === undefined)) {
                     page.unmaskWindow(actionMsg);
-                    page.updateStatus('Started copying ' + app, false);
+                    page.updateStatus('Copying ' + app + ': 0%', false, true);
                     page.monitorMigrationStatus('Copying ' + app);
                 } else {
                     page.unmaskWindow(actionMsg);
@@ -468,7 +549,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                     var res = (json && json.result) || {};
                     if (json && json.success && (res.success || res.success === undefined)) {
                         page.unmaskWindow(actionMsg);
-                        page.updateStatus('Started sync-back for ' + app, false);
+                        page.updateStatus('Sync-back ' + app + ': 0%', false, true);
                         page.monitorMigrationStatus('Sync-back ' + app, callbackOnComplete);
                     } else {
                         page.unmaskWindow(actionMsg);
@@ -665,12 +746,34 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             success: function (json) {
                 page.unmaskWindow(actionMsg);
                 if (json && json.success) {
+                    // Optimistic UI update (IDEAS.md §1 D.2) before silent background reconciliation
+                    var record = page.selectedApp;
+                    if (record && record.set) {
+                        var isMount = act === 'mount';
+                        var optimistic = {
+                            mounted: isMount
+                                ? {
+                                      source: json.bindSource || (target + '/AppCentral/' + app),
+                                      target: json.bindTarget || ('/volume1/.@plugins/AppCentral/' + app),
+                                  }
+                                : null,
+                            mismatch: null,
+                        };
+                        if (json.configUpdated !== false) {
+                            optimistic.configured = isMount;
+                            optimistic.selected = isMount;
+                        }
+                        record.set(optimistic);
+                        if (record.commit) {
+                            record.commit();
+                        }
+                    }
                     page.updateStatus(json.message || okMsg, false);
                     page.updateActionsUI();
                     if (typeof onSuccessCallback === 'function') {
                         onSuccessCallback();
                     } else {
-                        page.validate(app, true);
+                        page.validate(app, true, { mode: 'fast' });
                     }
                 } else {
                     page.updateStatus('Error: ' + ((json && json.error) || 'Operation failed'), true);
@@ -691,6 +794,27 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         }
     },
 
+    formatTransferProgress: function (label, progress, lastLine) {
+        var msg = label + ': ' + progress + '%';
+        if (lastLine) {
+            var m = String(lastLine).match(/\b(\d+(?:\.\d+)?[kMGT]?B\/s)\b/i);
+            if (m && m[1]) {
+                msg += ' (' + m[1] + ')';
+            }
+        }
+        return msg;
+    },
+
+    updateMaskMessage: function (message) {
+        if (!this.win || this.win.isDestroyed || !this.win.el) return;
+        var msgEl = this.win.el.down && (this.win.el.down('.x-mask-msg-text') || this.win.el.down('.x-mask-msg div'));
+        if (msgEl && msgEl.update) {
+            msgEl.update(Ext.String.htmlEncode(message));
+            return;
+        }
+        this.win.el.mask(message);
+    },
+
     monitorMigrationStatus: function (actionLabel, callbackOnComplete) {
         var page = this;
         if (typeof actionLabel === 'function') {
@@ -702,8 +826,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
         var app = page.selectedApp && (page.selectedApp.get ? page.selectedApp.get('name') : page.selectedApp.data.name);
         var baseLabel = actionLabel || (app ? ('Operation ' + app) : 'Transfer');
-        var initialMask = baseLabel + '...';
+        var initialMask = baseLabel + ': 0%';
         page.maskWindow(initialMask);
+        page.updateStatus(initialMask, false, true);
         page._pollActive = true;
 
         var poll = function () {
@@ -735,10 +860,13 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                     }
 
                     if (json && json.success) {
-                        var statusMsg = (actionLabel || (appName ? ('Transfer ' + appName) : 'Transfer')) + ': ' + progress + '%';
-                        if (page.win && !page.win.isDestroyed && page.win.el) {
-                            page.win.el.mask(statusMsg);
-                        }
+                        var statusMsg = page.formatTransferProgress(
+                            actionLabel || (appName ? ('Transfer ' + appName) : 'Transfer'),
+                            progress,
+                            lastLine,
+                        );
+                        page.updateMaskMessage(statusMsg);
+                        page.updateStatus(statusMsg, false, true);
 
                         var finished = state === 'done' && (!currentAppName || appName === currentAppName);
                         if (finished) {
@@ -769,7 +897,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             });
         };
 
-        page._pollTimer = setTimeout(poll, 500);
+        page._pollTimer = setTimeout(poll, 200);
     },
 
     buildDeleteTargetSummaryHtml: function (target, app, preview, chkId) {
@@ -1011,6 +1139,15 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                             if (combo.resumeEvents) combo.resumeEvents();
                         }
                     }
+                    // Optimistic UI update (IDEAS.md §1 D.2)
+                    var grid = page.win.down('#appGrid');
+                    var store = grid && grid.getStore && grid.getStore();
+                    var delRec = (store && store.findRecord && store.findRecord('name', app, 0, false, false, true)) || page.selectedApp;
+                    if (delRec && delRec.set) {
+                        delRec.set({ existsInTarget: false, targetSize: '0', targetSizeKb: 0 });
+                        if (delRec.commit) delRec.commit();
+                    }
+                    page.updateActionsUI();
                     page.updateStatus(res.message || ('Deleted target copy of ' + app), false);
                     page.validate(app, true);
                 } else {
@@ -1034,6 +1171,8 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             '1. Stop the app in AppCentral &rarr; 2. <b>Copy to target</b> &rarr; 3. <b>Mount</b> &rarr; 4. Start the app.<br><br>' +
             '<b>Move back to HDD (SSD &rarr; HDD):</b><br>' +
             '1. Stop the app in AppCentral &rarr; 2. <b>Unmount &amp; Sync-back</b> &rarr; 3. Start the app &rarr; 4. (Optional) <b>Delete target</b> to reclaim SSD space.<br><br>' +
+            '<b>HDD Monitor (also useful on HDD-only NAS):</b><br>' +
+            'Even without an SSD volume, you can use the <b>HDD Monitor</b> tab (read-only, all state in RAM <code>/tmp</code>) to see which processes or AppCentral packages wake your mechanical drives from standby.<br><br>' +
             '<b>Important safety rules:</b><br>' +
             '&bull; Always stop an application before copying, mounting, unmounting, syncing back, or deleting target data.<br>' +
             '&bull; <b>Sync back</b> and overwriting an existing target use mirror mode (<code>--delete</code>).<br>' +
@@ -1049,7 +1188,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 parentWin: page.win,
                 title: 'MountFix Quick Guide',
                 width: 640,
-                height: 360,
+                height: 410,
                 layout: 'fit',
                 modal: true,
                 items: [

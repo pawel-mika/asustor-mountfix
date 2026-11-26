@@ -14,6 +14,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
         this._dwPollActive = false;
         this._statusFadeTimer = null;
         this._validatingCount = 0;
+        this._validateSeq = 0;
         this.callParent();
         this.init();
     },
@@ -48,39 +49,61 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                     layout: 'anchor',
                     items: [
                         {
+                            xtype: 'fieldcontainer',
                             anchor: '100%',
-                            xtype: 'combo',
-                            fieldLabel: 'Select Volume',
-                            name: 'targetVolume',
-                            store: {
-                                fields: ['volume', 'mountPoint', 'freeSpace', 'totalSpace', 'usedPercent', 'isSSD'],
-                                data: [],
+                            height: 28,
+                            layout: {
+                                type: 'hbox',
+                                align: 'middle',
                             },
-                            queryMode: 'local',
-                            displayField: 'volume',
-                            valueField: 'volume',
-                            editable: false,
-                            triggerAction: 'all',
-                            tpl: Ext.create(
-                                'Ext.XTemplate',
-                                '<tpl for=".">',
-                                '<div class="x-boundlist-item {[!values.isSSD ? "x-item-disabled" : ""]}">',
-                                '{volume} ({mountPoint}) - {freeSpace} of {totalSpace} free, ({usedPercent} used) ',
-                                '[',
-                                '<tpl if="isSSD">SSD</tpl>',
-                                '<tpl if="!isSSD">HDD</tpl>',
-                                ']',
-                                '</div>',
-                                '</tpl>',
-                            ),
-                            listeners: {
-                                beforeselect: function (combo, record) {
-                                    return record.get('isSSD');
+                            items: [
+                                {
+                                    flex: 1,
+                                    margin: '0 8 0 0',
+                                    xtype: 'combo',
+                                    fieldLabel: 'Select Volume',
+                                    name: 'targetVolume',
+                                    store: {
+                                        fields: ['volume', 'mountPoint', 'freeSpace', 'totalSpace', 'usedPercent', 'isSSD'],
+                                        data: [],
+                                    },
+                                    queryMode: 'local',
+                                    displayField: 'volume',
+                                    valueField: 'volume',
+                                    editable: false,
+                                    triggerAction: 'all',
+                                    tpl: Ext.create(
+                                        'Ext.XTemplate',
+                                        '<tpl for=".">',
+                                        '<div class="x-boundlist-item {[!values.isSSD ? "x-item-disabled" : ""]}">',
+                                        '{volume} ({mountPoint}) - {freeSpace} of {totalSpace} free, ({usedPercent} used) ',
+                                        '[',
+                                        '<tpl if="isSSD">SSD</tpl>',
+                                        '<tpl if="!isSSD">HDD</tpl>',
+                                        ']',
+                                        '</div>',
+                                        '</tpl>',
+                                    ),
+                                    listeners: {
+                                        beforeselect: function (combo, record) {
+                                            return record.get('isSSD');
+                                        },
+                                        change: function (combo, newValue) {
+                                            fn.validate();
+                                        },
+                                    },
                                 },
-                                change: function (combo, newValue) {
-                                    fn.validate();
+                                {
+                                    xtype: 'button',
+                                    itemId: 'btnRefresh',
+                                    text: 'Refresh',
+                                    width: 78,
+                                    tooltip: 'Re-check mount state and recalculate disk sizes (bypasses size cache)',
+                                    handler: function () {
+                                        fn.validate(null, false, { forceRefresh: true });
+                                    },
                                 },
-                            },
+                            ],
                         },
                     ],
                 },
@@ -174,6 +197,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     align: 'right',
                                     menuDisabled: true,
                                     renderer: function (v) {
+                                        if (v === '...') return '<span style="color:#9ca3af;">...</span>';
                                         return v && v !== '0' ? v : '<span style="color:#9ca3af;">—</span>';
                                     },
                                 },
@@ -184,6 +208,7 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     align: 'right',
                                     menuDisabled: true,
                                     renderer: function (v) {
+                                        if (v === '...') return '<span style="color:#9ca3af;">...</span>';
                                         return v && v !== '0' ? v : '<span style="color:#9ca3af;">—</span>';
                                     },
                                 },

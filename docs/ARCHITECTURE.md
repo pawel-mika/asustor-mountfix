@@ -39,21 +39,21 @@ sequenceDiagram
     CGI-->>FE: HTTP 200 JSON Response
     
     par Async Unbuffered Progress & Rsync Run
-        Rsync->>Rsync: detect_rsync_flags() (-aH --numeric-ids [+ -A -X --outbuf=L])
+        Rsync->>Rsync: detect_rsync_flags() (-aH --numeric-ids [+ -A -X --outbuf=N])
         Rsync->>Pipe: Stream rsync --info=progress2 output (CR \r)
-        Script->>Status: _stream_rsync_progress() (stdbuf/awk CR->LF, flushed) >> status_file
+        Script->>Status: _stream_rsync_progress() (unbuffered tr CR->LF + POSIX read) >> status_file
         Rsync-->>Script: wait $rsync_pid (exit code)
-        Script->>Status: _write_status_atomic(): "DONE | 100% | Completed" or "ERROR | ..."
+        Script->>Status: invalidate_sizes_cache() + _write_status_atomic(): "DONE | 100% | Completed" or "ERROR | ..."
         Script->>Pipe: trap EXIT: rm -rf temp dir
         Script->>Lock: trap EXIT: release_transfer_lock()
-    and Frontend Polling Loop (every 500ms)
-        loop Every 500ms (monitorMigrationStatus)
+    and Frontend Polling Loop (200ms initial, then 500ms)
+        loop Polling (monitorMigrationStatus)
             FE->>CGI: GET migrate.cgi?act=status
             CGI->>Script: get_transfer_status_json()
             Script->>Status: Read app (line 1), last non-empty line, lock PID
             Script-->>CGI: Return {"app": "...", "state": "running|done|error", "progress": XX, "lastLine": "...", "pid": N}
             CGI-->>FE: HTTP 200 JSON Response
-            FE->>FE: Update modal mask ("Transfer <app>: XX%")
+            FE->>FE: Update modal mask & persistent footer #statusInfo ("Copying <app>: XX% (rate)")
         end
     end
 
@@ -73,6 +73,7 @@ All transient IPC and lock paths live under `${TMPDIR:-/tmp}` (overridable via e
 | File Path | Type | Purpose |
 | :--- | :--- | :--- |
 | `/tmp/mountfix_transfer.status` | Plain Text | Atomically updated status file holding the app name, live rsync progress lines, and final `DONE` / `ERROR` marker. |
+| `/tmp/mountfix_sizes.cache` | Plain Text (`tmpfs`) | Atomic 10-minute TTL cache of batched `du -sk` source/target sizes for `validate.cgi?mode=sizes`; invalidated on completed transfer/delete or bypassed via `refresh=1`. |
 | `/tmp/mountfix.lock/` | Directory Mutex | Atomic global transfer lock (`mkdir`) containing `pid` and `owner` files, with stale-PID recovery. |
 | `/tmp/mountfix_xfer.XXXXXX/progress.pipe` | Temp FIFO (`mktemp -d`) | Per-transfer named pipe capturing `rsync` stdout/stderr; removed automatically on subshell `EXIT`. |
 | `/tmp/mountfix_mount.XXXXXX`, `/tmp/mountfix_umount.XXXXXX` | Temp File (`mktemp`) | Per-call stderr capture for `mount --bind` and `umount`; removed immediately after reading. |
@@ -80,9 +81,7 @@ All transient IPC and lock paths live under `${TMPDIR:-/tmp}` (overridable via e
 ### 2.2 Non-Blocking Subshell & Unbuffered Progress Streaming
 
 1. **Detached Background Execution:** `_launch_rsync_transfer()` redirects all standard descriptors on the background subshell (`( ... ) </dev/null >/dev/null 2>&1 &`) and ignores `SIGHUP` (`trap '' HUP`), so `migrate.cgi`'s `$(...)` command substitution and `lighttpd` return immediately instead of blocking until `rsync` finishes.
-2. **Unbuffered CR → LF Normalization:** `rsync --info=progress2` emits carriage returns (`\r`) to update progress in place. When available, `detect_rsync_flags()` adds `--outbuf=L`, and `_stream_rsync_progress()` converts `\r` to `\n` without pipe block-buffering stalls:
-   - Uses `stdbuf -oL tr '\r' '\n' | awk '/[^ \t]/ { print; fflush() }'` when `stdbuf` is installed.
-   - Falls back to a pure `awk` reader (`RS = "\r"` with `fflush()`) when `stdbuf` is absent.
+2. **Unbuffered CR → LF Normalization:** `rsync --info=progress2` emits carriage returns (`\r`), not newlines (`\n`), to update progress in place. When supported, `detect_rsync_flags()` adds `--outbuf=N` (unbuffered — `--outbuf=L` would buffer `\r` lines until exit), and `_stream_rsync_progress()` converts `\r` to `\n` without pipe block-buffering stalls (`stdbuf -i0 -o0 tr '\r' '\n'`, BSD `tr -u`, or BusyBox `tr`'s unbuffered syscalls piped into a POSIX `while IFS= read -r` loop).
 
 ### 2.3 Status File Lifecycle
 
@@ -127,8 +126,8 @@ When `migrate.cgi?act=status` is invoked, `get_transfer_status_json()` in `webma
 Communication between backend and frontend relies on periodic **HTTP GET polling** rather than WebSockets or Server-Sent Events (SSE) to ensure full compatibility with ADM's lighttpd/CGI environment.
 
 - **Trigger:** Method `page.monitorMigrationStatus(actionLabel, callbackOnComplete)`.
-- **Interval:** Chained `500ms` `setTimeout()` (prevents overlapping in-flight requests) stopped via `stopMigrationMonitor()` on completion, error, or window `beforeclose`.
-- **UI Feedback:** Applies an ExtJS element mask (`page.win.el.mask()`) showing the live percentage.
+- **Interval:** Chained `setTimeout()` (`200 ms` initial poll, then `500 ms`; prevents overlapping in-flight requests) stopped via `stopMigrationMonitor()` on completion, error, or window `beforeclose`.
+- **UI Feedback:** Updates both the active mask text (`updateMaskMessage()`) and the persistent footer `#statusInfo` (`persist: true`) with live percentage and optional transfer rate (`Copying <app>: 42% (14.20MB/s)`).
 - **Termination Conditions:**
   - `state === 'error'` or `lastLine` contains `"ERROR"`: Stops polling, unmasks UI, displays error message.
   - `state === 'done'` (matching the active app): Stops polling, unmasks UI, shows completion status, runs targeted `validate(app)`, and triggers `callbackOnComplete`. Reaching `100%` while `state === 'running'` does **not** terminate early.
@@ -147,7 +146,7 @@ Data transfer and mount operations enforce strict server-side safety constraints
 3. **Atomic Single-Transfer Mutex (`acquire_transfer_lock` / `release_transfer_lock`):**
    - Uses atomic `mkdir /tmp/mountfix.lock` (storing `pid` and `owner` token) so only one transfer runs at a time, replacing loose substring `pgrep` matching. Stale locks from dead processes are detected via `kill -0` and recovered automatically; live locks are released on subshell `EXIT` via `trap`.
 4. **Safe `rsync` Flags & Mirror Mode (`detect_rsync_flags`):**
-   - Uses `-aH --numeric-ids` (archive, hard links, numeric UIDs/GIDs) and probes both `rsync --version` and a live `--dry-run` against the source/destination filesystems before enabling `-A` (ACLs) and `-X` (extended attributes, required by Docker `overlay2`), plus `--outbuf=L` when supported.
+   - Uses `-aH --numeric-ids` (archive, hard links, numeric UIDs/GIDs) and probes both `rsync --version` and a live `--dry-run` against the source/destination filesystems before enabling `-A` (ACLs) and `-X` (extended attributes, required by Docker `overlay2`), plus `--outbuf=N` when supported.
    - Unsafe `-u` (mtime-only update) is removed. Both directions use unified trailing-slash app paths (`"$src/" "$dst/"`) so `--delete` can never touch sibling apps.
    - Sync-back always runs with `--delete`; Copy-to-Target adds `--delete` when `force=1`.
 5. **Collision Detection & Explicit Confirmation:**
@@ -194,7 +193,8 @@ ADM enforces a 60-second per-script shutdown timeout (`/etc/script/script_trap.s
 
 - ADM's `lighttpd` does **not** authenticate `apps/MountFix/*.cgi`, so every CGI calls `require_adm_session()` first. It runs ADM's own `/usr/webman/portal/apis/admin.cgi` locally with `act=get-nonstop&sid=<sid>` and fails closed unless ADM answers `"success": true` (valid administrator session).
 - Mutating actions (`config.cgi?act=set`, `mount.cgi?act=mount|unmount`, `migrate.cgi?act=migrate|sync_back|delete_target`) enforce `REQUEST_METHOD=POST` via `require_post_method()`; read-only actions (`act=get`, `act=status`, `act=delete_preview`) accept `GET`.
-- `mount_app` and `unmount_app` atomically sync `etc/mountfix.conf` and `etc/mounts.list` (`update_mountfix_app_config`), and `validate.cgi` reports per-app `configured` and `mismatch` (`configured_not_mounted` / `mounted_not_configured`) using batched single-pass `du -sk` + `format_kb_human()`.
+- `mount_app` and `unmount_app` atomically sync `etc/mountfix.conf` and `etc/mounts.list` (`update_mountfix_app_config`), and `validate.cgi` supports two-tier loading (`mode=fast` for instant `< 50 ms` mount/config state with zero `du`, and `mode=sizes` for cached/batched `du -sk` sizes via `/tmp/mountfix_sizes.cache` with 10-minute TTL and `refresh=1` bypass, while defaulting to backward-compatible `mode=full`).
+- **Two-Tier Validation & Optimistic UI (`IDEAS.md` §1 C / D.2):** On full sweeps, `mf_actions.js` issues `mode=fast` first (unlocking action buttons as soon as mount/config state arrives) and immediately follows with a non-blocking `mode=sizes` request guarded by a monotonic `_validateSeq` counter. A **Refresh** button (`#btnRefresh`) next to the volume selector forces `refresh=1`. Successful `mount`, `unmount`, and `delete_target` responses update the ExtJS grid record optimistically before running silent background reconciliation.
 - All responses go through `send_json` / `send_json_error` (`Content-Type: application/json`, escaped strings). Unknown `act` returns `{"success": false, "error": "Invalid action"}`.
 - `save_mountfix_config` accepts only `{targetVolume, selectedApps:[{name}], enableSysctlTuning}` with a valid volume, existing non-protected packages, and optional boolean `enableSysctlTuning` (default `false`), and normalizes what it stores.
 - ADM's `AS.ARC.ajax` calls `failure(json)` whenever the top-level `success` is `false`; the UI reads `json.result.target_exists` / `json.result.error` there.

@@ -943,4 +943,105 @@ do
         fail "Expected POST required rejection for GET on $spec, got: $get_res"
 done
 
-echo "PASS: All shared library, F14 protection, url_decode, JSON helper, CGI hardening, F13 NVMe/df, F3, batched du, and POST-only tests passed."
+# ---------------------------------------------------------------------------
+# 16. IDEAS §1 (C): validate.cgi two-tier mode=fast (0 du) & mode=sizes cache
+# ---------------------------------------------------------------------------
+echo "Test 16: validate.cgi mode=fast (0 du) and mode=sizes tmpfs cache..."
+CACHE_FILE_TEST="$F3_ENV/mountfix_sizes.cache"
+rm -f "$CACHE_FILE_TEST"
+
+# 16a. mode=fast must invoke du ZERO times and return mount/config state
+: > "$DU_CALL_LOG"
+VAL_FAST=$(assert_cgi_json "$(
+    DU_BIN="$MOCK_DU" \
+    SIZES_CACHE_FILE="$CACHE_FILE_TEST" \
+    DIR_VOL1="$F3_VOL1" \
+    VOLUME_ROOT="$F3_VOL_ROOT" \
+    CONFIG_FILE="$F3_ETC/mountfix.conf" \
+    MF_CONFIG_DIR="$F3_ETC" \
+    QUERY_STRING="$VALID_SID&act=get&target=/volume2&mode=fast" \
+    ADM_AUTH_CGI="$MOCK_ADM_AUTH" \
+    MOUNTFIX_WEBMAN_COMMON_SH="$REPO_ROOT/webman/scripts/common.sh" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
+    sh "$REPO_ROOT/webman/validate.cgi"
+)" "validate.cgi mode=fast")
+FAST_DU_CALLS=$(wc -l < "$DU_CALL_LOG" | tr -d ' ')
+[ "$FAST_DU_CALLS" -eq 0 ] || fail "mode=fast must run 0 du calls, got $FAST_DU_CALLS: $(cat "$DU_CALL_LOG")"
+jq -e '.success == true and .mode == "fast" and .sizesLoaded == false and (.apps | length == 2) and (.apps[0] | has("configured") and has("existsInTarget"))' >/dev/null <<<"$VAL_FAST" || \
+    fail "mode=fast response invalid: $VAL_FAST"
+
+# 16b. mode=sizes first call: cache miss -> batched du (<=2) + populates cache
+: > "$DU_CALL_LOG"
+VAL_SIZES_1=$(assert_cgi_json "$(
+    DU_BIN="$MOCK_DU" \
+    SIZES_CACHE_FILE="$CACHE_FILE_TEST" \
+    DIR_VOL1="$F3_VOL1" \
+    VOLUME_ROOT="$F3_VOL_ROOT" \
+    CONFIG_FILE="$F3_ETC/mountfix.conf" \
+    MF_CONFIG_DIR="$F3_ETC" \
+    QUERY_STRING="$VALID_SID&act=get&target=/volume2&mode=sizes" \
+    ADM_AUTH_CGI="$MOCK_ADM_AUTH" \
+    MOUNTFIX_WEBMAN_COMMON_SH="$REPO_ROOT/webman/scripts/common.sh" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
+    sh "$REPO_ROOT/webman/validate.cgi"
+)" "validate.cgi mode=sizes miss")
+SIZES_1_DU=$(wc -l < "$DU_CALL_LOG" | tr -d ' ')
+[ "$SIZES_1_DU" -ge 1 ] && [ "$SIZES_1_DU" -le 2 ] || fail "mode=sizes cache miss expected 1-2 batched du calls, got $SIZES_1_DU"
+[ -f "$CACHE_FILE_TEST" ] || fail "mode=sizes did not create cache file $CACHE_FILE_TEST"
+jq -e '.success == true and .mode == "sizes" and .sizesLoaded == true and .sizesCached == false and (.apps | length == 2)' >/dev/null <<<"$VAL_SIZES_1" || \
+    fail "mode=sizes cache miss response invalid: $VAL_SIZES_1"
+
+# 16c. mode=sizes second call: cache hit -> ZERO du calls
+: > "$DU_CALL_LOG"
+VAL_SIZES_2=$(assert_cgi_json "$(
+    DU_BIN="$MOCK_DU" \
+    SIZES_CACHE_FILE="$CACHE_FILE_TEST" \
+    DIR_VOL1="$F3_VOL1" \
+    VOLUME_ROOT="$F3_VOL_ROOT" \
+    CONFIG_FILE="$F3_ETC/mountfix.conf" \
+    MF_CONFIG_DIR="$F3_ETC" \
+    QUERY_STRING="$VALID_SID&act=get&target=/volume2&mode=sizes" \
+    ADM_AUTH_CGI="$MOCK_ADM_AUTH" \
+    MOUNTFIX_WEBMAN_COMMON_SH="$REPO_ROOT/webman/scripts/common.sh" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
+    sh "$REPO_ROOT/webman/validate.cgi"
+)" "validate.cgi mode=sizes hit")
+SIZES_2_DU=$(wc -l < "$DU_CALL_LOG" | tr -d ' ')
+[ "$SIZES_2_DU" -eq 0 ] || fail "mode=sizes cache hit must run 0 du calls, got $SIZES_2_DU"
+jq -e '.success == true and .mode == "sizes" and .sizesCached == true and (.apps | length == 2)' >/dev/null <<<"$VAL_SIZES_2" || \
+    fail "mode=sizes cache hit response invalid: $VAL_SIZES_2"
+
+# 16d. mode=sizes&refresh=1 bypasses cache
+: > "$DU_CALL_LOG"
+VAL_SIZES_REF=$(assert_cgi_json "$(
+    DU_BIN="$MOCK_DU" \
+    SIZES_CACHE_FILE="$CACHE_FILE_TEST" \
+    DIR_VOL1="$F3_VOL1" \
+    VOLUME_ROOT="$F3_VOL_ROOT" \
+    CONFIG_FILE="$F3_ETC/mountfix.conf" \
+    MF_CONFIG_DIR="$F3_ETC" \
+    QUERY_STRING="$VALID_SID&act=get&target=/volume2&mode=sizes&refresh=1" \
+    ADM_AUTH_CGI="$MOCK_ADM_AUTH" \
+    MOUNTFIX_WEBMAN_COMMON_SH="$REPO_ROOT/webman/scripts/common.sh" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
+    sh "$REPO_ROOT/webman/validate.cgi"
+)" "validate.cgi mode=sizes refresh=1")
+SIZES_REF_DU=$(wc -l < "$DU_CALL_LOG" | tr -d ' ')
+[ "$SIZES_REF_DU" -ge 1 ] && [ "$SIZES_REF_DU" -le 2 ] || fail "refresh=1 must bypass cache and run 1-2 du calls, got $SIZES_REF_DU"
+jq -e '.success == true and .sizesCached == false' >/dev/null <<<"$VAL_SIZES_REF" || \
+    fail "refresh=1 response invalid: $VAL_SIZES_REF"
+
+# 16e. Invalid mode is rejected
+VAL_BAD_MODE=$(assert_cgi_json "$(
+    DIR_VOL1="$F3_VOL1" \
+    VOLUME_ROOT="$F3_VOL_ROOT" \
+    QUERY_STRING="$VALID_SID&act=get&target=/volume2&mode=bogus" \
+    ADM_AUTH_CGI="$MOCK_ADM_AUTH" \
+    MOUNTFIX_WEBMAN_COMMON_SH="$REPO_ROOT/webman/scripts/common.sh" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
+    sh "$REPO_ROOT/webman/validate.cgi"
+)" "validate.cgi invalid mode")
+jq -e '.success == false and (.error | contains("Invalid mode"))' >/dev/null <<<"$VAL_BAD_MODE" || \
+    fail "Invalid mode was not rejected: $VAL_BAD_MODE"
+
+echo "PASS: All shared library, F14 protection, url_decode, JSON helper, CGI hardening, F13 NVMe/df, F3, batched du, two-tier cache, and POST-only tests passed."

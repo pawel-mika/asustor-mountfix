@@ -420,4 +420,51 @@ ensure_app_not_busy "/volume2" "busyapp" >/dev/null || fail "ensure_app_not_busy
 grep -q 'unmaskAll' "$REPO_ROOT/webman/mf_actions.js" || fail "unmaskAll missing from mf_actions.js"
 grep -q 'btnUnmount.setDisabled(validating || running || !mounted)' "$REPO_ROOT/webman/mf_actions.js" || fail "Unmount button must be disabled when validating or running"
 
+# Test 12: --outbuf=N (never --outbuf=L), real-time unbuffered CR progress streaming & sizes cache invalidation
+MOCK_RSYNC_STREAM="$TMP_DIR/mock_rsync_stream.sh"
+cat <<'EOF' > "$MOCK_RSYNC_STREAM"
+#!/bin/sh
+for arg in "$@"; do
+    case "$arg" in
+        --version) echo "rsync  version 3.4.3  protocol version 31"; exit 0 ;;
+        --help) echo "  --outbuf=N|L|B"; exit 0 ;;
+        --dry-run) exit 0 ;;
+    esac
+done
+printf '\r      350,000  35%%   14.20MB/s    0:00:02\r'
+sleep 2
+printf '    1,000,000 100%%   15.00MB/s    0:00:00\r\n'
+exit 0
+EOF
+chmod 755 "$MOCK_RSYNC_STREAM"
+
+STREAM_FLAGS=$(RSYNC_BIN="$MOCK_RSYNC_STREAM" detect_rsync_flags)
+printf '%s\n' "$STREAM_FLAGS" | grep -q -- '--outbuf=N' || fail "detect_rsync_flags must emit --outbuf=N, got: [$STREAM_FLAGS]"
+if printf '%s\n' "$STREAM_FLAGS" | grep -q -- '--outbuf=L'; then
+    fail "detect_rsync_flags must not emit --outbuf=L (buffers CR progress): [$STREAM_FLAGS]"
+fi
+
+export SIZES_CACHE_FILE="$TMP_DIR/test_sizes.cache"
+printf '# target=/volume2 ts=9999999999\n' > "$SIZES_CACHE_FILE"
+export RSYNC_BIN="$MOCK_RSYNC_STREAM"
+
+STREAM_START=$(start_app_transfer "/volume2" "testapp" "1")
+printf '%s\n' "$STREAM_START" | jq -e '.success == true' >/dev/null || fail "Stream mock start_app_transfer failed: $STREAM_START"
+
+# Poll mid-transfer (before rsync finishes its 2s sleep) and verify 35% arrived live!
+LIVE_SEEN=0
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 0.15
+    LIVE_ST=$(get_transfer_status_json)
+    if printf '%s\n' "$LIVE_ST" | jq -e '.state == "running" and .progress == 35' >/dev/null 2>&1; then
+        LIVE_SEEN=1
+        break
+    fi
+done
+[ "$LIVE_SEEN" -eq 1 ] || fail "Expected live mid-transfer progress 35% before EOF, last status: $(get_transfer_status_json)"
+
+STREAM_DONE=$(wait_for_transfer_done 8) || fail "Timed out waiting for stream mock transfer"
+printf '%s\n' "$STREAM_DONE" | jq -e '.state == "done" and .progress == 100' >/dev/null || fail "Expected DONE after stream transfer, got: $STREAM_DONE"
+[ ! -e "$SIZES_CACHE_FILE" ] || fail "Completed transfer must invalidate SIZES_CACHE_FILE"
+
 echo "PASS: Sync-back and transfer guard tests passed."

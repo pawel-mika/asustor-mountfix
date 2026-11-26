@@ -6,7 +6,7 @@ This document captures architectural analysis, performance bottlenecks, and prop
 
 ## 1. Optimize `validate.cgi` & Configuration Validation Performance
 
-> **Status (`0.0.0.108`–`0.0.0.115`):** Approaches **A** (single-app `validate(appName)`), **B** (batched single-pass `du -sk` with `awk` human formatting), and **D.1** (non-blocking persistent status bar indicator) are **implemented**. Approaches **C** (two-tier instant state + cached sizes) and **D.2** (optimistic UI updates) remain optional future improvements.
+> **Status:** **All approaches (A, B, C, D.1, D.2) implemented.** Approaches **A** (single-app `validate(appName)`), **B** (batched single-pass `du -sk` with `awk` human formatting), and **D.1** (non-blocking persistent status bar indicator) shipped in `0.0.0.108`–`0.0.0.115`. Approaches **C** (two-tier `mode=fast` instant state + `mode=sizes` backed by `/tmp/mountfix_sizes.cache` with 10-minute TTL, auto-invalidation on transfer/delete, and manual **Refresh** button with `refresh=1`) and **D.2** (optimistic ExtJS grid updates on `mount`, `unmount`, and `delete_target`) are now implemented as well.
 
 ### 1.1 Problem Statement
 When MountFix opens or changes configuration states (such as after mounting, unmounting, or switching target volumes), the frontend triggers `validate()` which calls `validate.cgi?act=get&target=/volumeX`.

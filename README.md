@@ -15,7 +15,8 @@ MountFix solves this without modifying ADM or reconfiguring applications:
 3. **Boot & shutdown persistence** — ADM init scripts (`S02MountFix` / `K02MountFix`) automatically re-establish bind mounts at boot *before* relocated apps start and detach them cleanly at shutdown *after* apps stop.
 
 Key assumptions:
-- **SSD/NVMe target required:** The UI detects block-device rotational flags (SATA/SAS RAID and NVMe/MMC) and blocks HDD volumes from being selected as targets.
+- **SSD/NVMe target required for relocation:** The **App Relocation** tab detects block-device rotational flags (SATA/SAS RAID and NVMe/MMC) and blocks HDD volumes from being selected as relocation targets.
+- **Useful on HDD-only NAS too:** Even if your NAS only has mechanical HDDs (no SSD volume), the read-only **HDD Monitor** tab is still useful for tracking which processes or AppCentral packages wake your drives from standby.
 - **HDD fallback copy is preserved:** MountFix keeps the original `/volume1/.@plugins/AppCentral/<app>` directory underneath the bind mount. Use **Sync back** to mirror newer SSD data back to `/volume1` before reverting or changing disks.
 - **Apps must be stopped before any operation:** Copy, Mount, Unmount, and Sync-back are only safe while the target application is stopped in AppCentral.
 
@@ -50,12 +51,12 @@ MountFix distinguishes normal runtime stops from actual system power events via 
 
 | Feature | When It Runs | What It Does |
 |---|---|---|
-| **Copy to target** | User clicks **Copy to target** | Runs a detached background `rsync` (`-aH --numeric-ids` + auto-probed `-A`/`-X`/`--outbuf=L`) from `/volume1` to `<target>/AppCentral/<app>`. If the target folder already exists, prompts before running mirror mode (`--delete`). |
-| **Mount** | User clicks **Mount** | Verifies no processes hold the app directory (`pids_using_paths`), executes `mount --bind`, and atomically adds the app to `etc/mountfix.conf` and `etc/mounts.list`. |
-| **Unmount** | User clicks **Unmount** | Prompts for **Unmount & Sync-back** (recommended) or **Unmount only**. Detaches the bind mount and atomically removes the app from `etc/mountfix.conf` and `etc/mounts.list`. |
+| **Copy to target** | User clicks **Copy to target** | Runs a detached background `rsync` (`-aH --numeric-ids` + auto-probed `-A`/`-X`/`--outbuf=N`) from `/volume1` to `<target>/AppCentral/<app>` with live `%` / transfer-rate progress in both the overlay and footer status bar. If the target folder already exists, prompts before running mirror mode (`--delete`). |
+| **Mount** | User clicks **Mount** | Verifies no processes hold the app directory (`pids_using_paths`), executes `mount --bind`, atomically adds the app to `etc/mountfix.conf` and `etc/mounts.list`, and updates the UI optimistically before silent server reconciliation. |
+| **Unmount** | User clicks **Unmount** | Prompts for **Unmount & Sync-back** (recommended) or **Unmount only**. Detaches the bind mount, atomically removes the app from `etc/mountfix.conf` and `etc/mounts.list`, and updates the UI optimistically. |
 | **Sync back** | User clicks **Sync back** (or **Unmount & Sync-back**) | Mirrors `<target>/AppCentral/<app>/` back to `/volume1/.@plugins/AppCentral/<app>/` using `--delete` (after explicit confirmation) so the HDD copy becomes identical to the SSD copy. |
 | **Delete target** | User clicks **Delete target** | Reclaims SSD space by permanently removing `<target>/AppCentral/<app>` only when the app is stopped, unmounted, and removed from boot config. Runs a read-only `rsync --dry-run` diff preview first, offers **Sync back & Delete target** when SSD differences exist, requires explicit checkbox confirmation (and server-side `confirm=<app>`), and refreshes volume free space. |
-| **Validation & mismatch warnings** | On window open, volume change, or after per-app actions | Non-blocking single-pass `du -sk` disk usage check + `stat -c %d:%i` mount verification. Flags any `configured != mounted` mismatch in the grid (`Mounted (not in boot)` / `Not mounted (in boot)`). Action buttons in **Options** are temporarily disabled while validation is in flight so actions never run against stale state. |
+| **Two-tier validation & size cache** | On window open, volume change, **Refresh**, or after per-app actions | Tier 1 (`mode=fast`, `< 50 ms`, zero `du`) verifies mount/boot state via `stat -c %d:%i` and unlocks action buttons immediately, flagging any `configured != mounted` mismatch. Tier 2 (`mode=sizes`) populates disk usage in the background from a 10-minute `tmpfs` cache (`/tmp/mountfix_sizes.cache`) or a batched single-pass `du -sk` (at most 1 `du` per volume), with an on-demand **Refresh** button (`refresh=1`) and automatic invalidation after transfers or deletions. |
 | **Optional `sysctl` tuning** | At boot / `start-stop.sh start` (only if enabled) | Controlled by the **Apply kernel VM/writeback sysctl tuning on boot** checkbox (`enableSysctlTuning`, **off by default**). When enabled, logs previous values and sets `vm.swappiness=1`, `vm.vfs_cache_pressure=10`, `vm.dirty_writeback_centisecs=6000`, `vm.dirty_expire_centisecs=6000`. |
 | **Uninstall guard** | Package uninstall (`CONTROL/pre-uninstall.sh`) | Scans `/proc/mounts` and **blocks uninstall** (`exit 1`) if any AppCentral bind mount is still active, listing the mounted apps. |
 | **HDD Activity Monitor** | User opens the **HDD Monitor** tab and clicks **Start** (`30s`–`12h`) | Runs a read-only background observer in `tmpfs` (`/tmp`) that tracks physical HDD `/proc/diskstats` deltas, queries drive power state via `hdparm -C` (without waking standby drives), and attributes I/O to processes and AppCentral packages using `iotop-static` (with automatic or selectable `/proc/<pid>/io` fallback) and `st_dev` correlation. |
@@ -97,6 +98,8 @@ MountFix distinguishes normal runtime stops from actual system power events via 
 ## HDD Monitor — Diagnosing HDD Wakeups & Disk I/O
 
 The **HDD Monitor** tab helps you find out **which processes or AppCentral applications are still reading/writing to mechanical HDDs** (preventing disk hibernation/standby) and whether those apps can be relocated to SSD.
+
+> **HDD-only NAS?** You do **not** need an SSD volume to use **HDD Monitor**. Even on a NAS with mechanical HDDs only, you can install MountFix and use this read-only tab to see which ADM services, background jobs, or AppCentral packages keep waking your drives from standby.
 
 ### How It Works
 - **Read-only & zero HDD wakeups:** The background worker runs at low priority (`nice 10`) and keeps all locks, state files, and reports strictly in RAM (`tmpfs` under `/tmp`). Reading `/proc` and `/sys` never touches physical disks, and per-PID file-descriptor inspection runs *only* during samples where `/proc/diskstats` confirms physical HDD I/O occurred.
@@ -156,7 +159,7 @@ The **HDD Monitor** tab helps you find out **which processes or AppCentral appli
 - **CGI API:** All endpoints require a valid ADM administrator `sid`; mutating actions require `POST`.
   - `GET config.cgi?act=get` — returns current config, installed apps (excluding `MountFix`), volumes (SSD/HDD + free space), and package version.
   - `POST config.cgi?act=set` — validates and saves `{targetVolume, selectedApps, enableSysctlTuning}` and regenerates `etc/mounts.list`.
-  - `GET validate.cgi?act=get&target=VOL[&app=NAME]` — returns per-app mount state, `configured`/`mismatch` flags, and batched `du -sk` sizes.
+  - `GET validate.cgi?act=get&target=VOL[&app=NAME][&mode=full|fast|sizes][&refresh=1]` — returns per-app mount state, `configured`/`mismatch` flags (`mode=fast` skips `du` completely), and cached/batched `du -sk` sizes (`mode=sizes`, backed by `/tmp/mountfix_sizes.cache` with 10-minute TTL; `refresh=1` forces recalculation).
   - `POST mount.cgi?act=mount|unmount&app=NAME&target=VOL` — binds/unbinds the app and atomically syncs boot configuration.
   - `POST migrate.cgi?act=migrate|sync_back&app=NAME&target=VOL[&force=1]` / `GET migrate.cgi?act=status` — starts or polls detached background `rsync` transfers protected by `/tmp/mountfix.lock`.
   - `GET migrate.cgi?act=delete_preview&app=NAME&target=VOL` / `POST migrate.cgi?act=delete_target&app=NAME&target=VOL&confirm=NAME` — inspects SSD vs. HDD differences (`rsync --dry-run`) and safely removes `<target>/AppCentral/<app>` under `/tmp/mountfix.lock`.
@@ -165,7 +168,7 @@ The **HDD Monitor** tab helps you find out **which processes or AppCentral appli
   - [docs/ADM-UI-GUIDELINES.md](docs/ADM-UI-GUIDELINES.md) — field-verified ASUSTOR ADM 5.1.5 ExtJS 4 / `adm3.css` rules and UI pitfalls.
   - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — internal IPC, transfer engine, lock protocol, and boot/shutdown lifecycle.
   - [docs/TECHNICAL-REVIEW.md](docs/TECHNICAL-REVIEW.md) — full security/reliability audit, ADM 5.1.5 field verification, and Stage 1–2 implementation history.
-  - [IDEAS.md](IDEAS.md) — engineering proposals & optional `validate.cgi` caching roadmap (§2 Safe *Delete target* and §3 *HDD Monitor* implemented).
+  - [IDEAS.md](IDEAS.md) — engineering proposals and architecture notes (§1 `validate.cgi` optimization A–D, §2 Safe *Delete target*, and §3 *HDD Monitor* all implemented).
 
 ---
 

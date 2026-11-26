@@ -55,6 +55,11 @@ grep -q "value: 3600" webman/mountfix.js || { echo "FAIL: 1h duration preset mis
 # Check that Target Directory Exists prompt helper is present and used on failure/success
 grep -q "promptTargetExists" webman/mountfix.js || { echo "FAIL: promptTargetExists missing from mountfix.js"; exit 1; }
 grep -q "failure: function (json)" webman/mountfix.js || { echo "FAIL: failure(json) payload handler missing from mountfix.js"; exit 1; }
+grep -q "itemId: 'btnRefresh'" webman/mountfix.js || { echo "FAIL: manual Refresh button (#btnRefresh) missing from mountfix.js"; exit 1; }
+grep -q "mode: 'fast'" webman/mountfix.js || { echo "FAIL: two-tier mode=fast missing from mountfix.js"; exit 1; }
+grep -q "mode: 'sizes'" webman/mountfix.js || { echo "FAIL: two-tier mode=sizes missing from mountfix.js"; exit 1; }
+grep -q "formatTransferProgress" webman/mountfix.js || { echo "FAIL: formatTransferProgress missing from mountfix.js"; exit 1; }
+grep -q "HDD-only NAS" webman/mountfix.js || { echo "FAIL: HDD-only NAS note missing from Quick Guide in mountfix.js"; exit 1; }
 
 # Verify AS.ARC.ajax failure(d) payload handling in MountFix.Actions when node is available
 if command -v node >/dev/null 2>&1; then
@@ -741,6 +746,103 @@ assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmSyncAndDelete'].disable
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, false);
 
 sandbox.Ext.create = origCreate;
+
+// Test: Two-tier validate() (Tier 1 mode=fast unlocks actions, Tier 2 mode=sizes runs in background; forceRefresh passes refresh=1)
+const origAjaxTwoTier = sandbox.AS.ARC.ajax;
+const ajaxQueue = [];
+sandbox.AS.ARC.ajax = (opts) => {
+    ajaxQueue.push(opts);
+};
+
+const recData = { name: 'docker-ce', existsInTarget: false, mounted: null, configured: false, selected: false, sourceSize: '0', targetSize: '0' };
+const mockRecord = {
+    data: recData,
+    committed: 0,
+    get(k) { return this.data[k]; },
+    set(obj) { Object.assign(this.data, obj); },
+    commit() { this.committed++; },
+};
+const mockStore = {
+    findRecord(field, val) { return val === 'docker-ce' ? mockRecord : null; },
+    add() {},
+    data: { items: [mockRecord] },
+};
+p = makePage();
+p.validate = actionsProto.validate;
+p.applyValidatedApps = actionsProto.applyValidatedApps;
+p.selectedApp = mockRecord;
+p.win.down = (sel) => {
+    if (sel === 'combo[name=targetVolume]') return { getValue: () => '/volume2' };
+    if (sel === '#appGrid') return { getStore: () => mockStore };
+    return null;
+};
+
+p.validate(null, false, { forceRefresh: true });
+assert.strictEqual(ajaxQueue.length, 1, 'Tier 1 must fire immediately');
+assert(ajaxQueue[0].url.includes('mode=fast'), 'Tier 1 must request mode=fast');
+assert.strictEqual(p._validatingCount, 1, 'Tier 1 increments _validatingCount');
+
+ajaxQueue[0].success({
+    success: true,
+    mode: 'fast',
+    apps: [{ name: 'docker-ce', existsInTarget: true, mounted: null, configured: false, mismatch: null }],
+});
+assert.strictEqual(p._validatingCount, 0, 'Tier 1 completion unlocks action buttons before Tier 2 finishes');
+assert.strictEqual(mockRecord.get('existsInTarget'), true, 'Tier 1 updates record state');
+assert.strictEqual(ajaxQueue.length, 2, 'Tier 2 must fire after Tier 1');
+assert(ajaxQueue[1].url.includes('mode=sizes') && ajaxQueue[1].url.includes('refresh=1'), 'Tier 2 must pass mode=sizes&refresh=1 on forceRefresh');
+
+ajaxQueue[1].success({
+    success: true,
+    mode: 'sizes',
+    apps: [{ name: 'docker-ce', sourceSize: '120.0M', targetSize: '120.0M' }],
+});
+assert.strictEqual(mockRecord.get('sourceSize'), '120.0M', 'Tier 2 populates sourceSize');
+assert.strictEqual(mockRecord.get('targetSize'), '120.0M', 'Tier 2 populates targetSize');
+
+// Test: Optimistic UI updates in bindMountAction (D.2)
+ajaxQueue.length = 0;
+p.validateCalls.length = 0;
+p.validate = (app, silent, opts) => { p.validateCalls.push({ app, silent, opts }); };
+p.bindMountAction('mount', 'Mounting...', 'Mounted');
+assert.strictEqual(ajaxQueue.length, 1);
+ajaxQueue[0].success({ success: true, bindSource: '/volume2/AppCentral/docker-ce', bindTarget: '/volume1/.@plugins/AppCentral/docker-ce', configUpdated: true });
+assert(mockRecord.get('mounted') && mockRecord.get('mounted').target === '/volume1/.@plugins/AppCentral/docker-ce', 'Optimistic mount must set mounted immediately');
+assert.strictEqual(mockRecord.get('configured'), true, 'Optimistic mount must set configured=true');
+assert.strictEqual(p.validateCalls.length, 1);
+assert.strictEqual(p.validateCalls[0].opts.mode, 'fast', 'Post-mount reconciliation should use mode=fast');
+
+// Test: monitorMigrationStatus updates both mask text and persistent #statusInfo with live % and speed
+ajaxQueue.length = 0;
+timeoutCallbacks.length = 0;
+let lastMaskText = '';
+const statusUpdates = [];
+p = makePage();
+p.win.el = {
+    mask(m) { lastMaskText = m; },
+    unmask() {},
+    down(sel) {
+        if (sel === '.x-mask-msg-text') return { update(html) { lastMaskText = html; } };
+        return null;
+    },
+};
+p.updateStatus = (msg, isErr, persist) => { statusUpdates.push({ msg, isErr, persist }); };
+p.monitorMigrationStatus('Copying docker-ce');
+assert.strictEqual(timeoutCallbacks.length, 1);
+timeoutCallbacks.shift()();
+assert.strictEqual(ajaxQueue.length, 1);
+ajaxQueue[0].success({
+    success: true,
+    result: { app: 'docker-ce', state: 'running', progress: 42, lastLine: ' 12,345,678  42%  14.20MB/s  0:00:04' },
+});
+assert.strictEqual(lastMaskText, 'Copying docker-ce: 42% (14.20MB/s)', 'Mask text must show live % and speed');
+assert(
+    statusUpdates.some((s) => s.msg === 'Copying docker-ce: 42% (14.20MB/s)' && s.persist === true),
+    'Footer #statusInfo must receive persistent live progress updates',
+);
+p.stopMigrationMonitor();
+
+sandbox.AS.ARC.ajax = origAjaxTwoTier;
 EOF
 fi
 

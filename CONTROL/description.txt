@@ -1,11 +1,14 @@
 MountFix lets you transparently relocate selected AppCentral applications from Volume 1 (/volume1/.@plugins/AppCentral) to a faster SSD/NVMe volume using bind mounts (mount --bind), without breaking ADM integration.
 
-Features:
-- Copy and sync-back application data in the background with safe rsync flags (hard links, xattrs/ACLs, mirror mode)
-- Automatic boot and shutdown mount management (S02MountFix / K02MountFix) with jq-free boot path and safe per-path unmount guards
-- Native ADM UI with SSD/NVMe volume detection, disk usage checks, and boot-config mismatch warnings
+Even on an HDD-only NAS (without an SSD volume), MountFix is useful for its read-only HDD Monitor tab, which helps identify which processes or AppCentral packages wake mechanical drives from standby.
 
-Note: Always stop an application in AppCentral before copying, mounting, unmounting, or syncing back, and keep current backups of critical data.
+Features:
+- Copy, sync-back, and safely delete target application data with background rsync (hard links, xattrs/ACLs, mirror mode, diff preview, and live progress)
+- Automatic boot and shutdown mount management (S02MountFix / K02MountFix) with jq-free boot path and safe per-path unmount guards
+- Read-only HDD Activity Monitor (30s-12h, stored in RAM /tmp) to diagnose HDD wakeups and standby blockers — works on HDD-only NAS setups too
+- Native ADM UI with SSD/NVMe detection, fast two-tier validation with size caching, and boot-config mismatch warnings
+
+Note: Always stop an application in AppCentral before copying, mounting, unmounting, syncing back, or deleting target data, and keep current backups of critical data.
 
 Disclaimer: Use this software at your own risk. MountFix performs low-level bind-mount, file-mirroring, and kernel (sysctl) operations. It is provided "as is", without any warranty; the author is not liable for any data loss, service downtime, system instability, or hardware damage.
 
