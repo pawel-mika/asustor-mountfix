@@ -12,4 +12,4 @@ Note: Always stop an application in AppCentral before copying, mounting, unmount
 
 Disclaimer: Use this software at your own risk. MountFix performs low-level bind-mount, file-mirroring, and kernel (sysctl) operations. It is provided "as is", without any warranty; the author is not liable for any data loss, service downtime, system instability, or hardware damage.
 
-Website: https://mikedev.eu
+Website: https://mikadev.eu
