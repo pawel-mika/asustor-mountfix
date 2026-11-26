@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Date** | 2026-11-19 (updated 2026-11-26) |
-| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branches 1–4 verified in `0.0.0.106`–`0.0.0.123`; Post-Stage 2 **HDD Activity Monitor** implemented & verified on NAS in `0.0.0.124`–`0.0.0.130` (`7915442`, see §12) |
+| **Reviewed revision** | Initial audit on `96ac956` (`0.0.0.102`); Stage 1 verified on NAS in `0.0.0.103`–`0.0.0.105`; Stage 2 Branches 1–4 verified in `0.0.0.106`–`0.0.0.123`; Post-Stage 2 **HDD Activity Monitor** verified on NAS in `0.0.0.124`–`0.0.0.130` (`7915442`, see §12); Post-Stage 2 **Safe "Delete Target" Workflow** & **ADM 5.1.5 UI Guidelines** implemented in `0.0.0.131`–`0.0.0.134` (`5d4b9d2`–`a5e6cce`, see §13) |
 | **Scope** | Whole repository: `CONTROL/`, `webman/` (CGI + shell library + ExtJS UI), `bin/`, `build.sh` / `buildJs.sh`, `tests/`, `etc/` |
-| **Status** | **Stage 1, Stage 2, and Post-Stage 2 HDD Activity Monitor (`IDEAS.md` §3) complete & verified on ADM 5.1.5.** All audit findings `F1`–`F17` resolved (§8–§11). **Remaining backlog:** Safe *Delete target* workflow (`IDEAS.md` §2) and optional `validate.cgi` Approaches C / D.2 (`IDEAS.md` §1). |
+| **Status** | **Stage 1, Stage 2, HDD Activity Monitor (`IDEAS.md` §3), and Safe *Delete Target* (`IDEAS.md` §2) complete.** All audit findings `F1`–`F17` resolved (§8–§11). **Remaining optional backlog:** `validate.cgi` Approaches C / D.2 (`IDEAS.md` §1). |
 
 ---
 
@@ -638,8 +638,8 @@ Inspected directly against ADM 5.1.5 (`portal/build/launcherBuild.js`, `portal/a
 
 ### 11.2 Open items (Post-Stage 2)
 
-- **Live NAS verification:** Verified on ADM 5.1.5 (`0.0.0.123`–`0.0.0.130`).
-- **Post-Stage 2 (`IDEAS.md` §2):** Safe *Delete target* workflow.
+- **Live NAS verification:** Verified on ADM 5.1.5 (`0.0.0.123`–`0.0.0.134`).
+- **Post-Stage 2 (`IDEAS.md` §2):** Safe *Delete target* workflow — **completed** (see §13).
 
 ---
 
@@ -657,3 +657,17 @@ Implemented the read-only **HDD Activity Monitor** (`IDEAS.md` §3) as a second 
 - **POSIX `IFS='\t'` collapses consecutive tabs (`\t\t`):** When a non-AppCentral process (`jbd2/md1-8`, `logmand`) had an empty `appName` column in TSV, `while IFS='\t' read` shifted columns left and produced invalid JSON (`"dState":11:10:40`). Rewrote JSON serialization in pure `awk -F'\t'` (with `%d` numeric coercion and `ENVIRON` string passing in `_diskwatch_merge_culprit`) plus `jq -e` self-healing on status reads.
 - **System root RAID (`md0` / `/`) & relocated app attribution:** Extended `discover_hdd_devices` to include all `/proc/mounts` mountpoints backed by rotational HDDs (not only `/volume[0-9]*`), capped per-PID FD inspection at 32 non-virtual FDs with early exit, and checked `etc/mounts.list` so already-relocated apps (e.g. `entware` `mc` browsing `/volume1`) display `Mounted on SSD` rather than `Still on HDD — can relocate`.
 - **ExtJS 4 `fieldset` + `hbox` height collapse:** Replaced `layout: 'vbox'` on the controls `fieldset` with `layout: 'anchor'` and explicit `height: 32` on the `hbox` `fieldcontainer`.
+
+---
+
+## 13. Post-Stage 2 — Safe "Delete Target" Workflow & ADM 5.1.5 UI Guidelines (`0.0.0.131`–`0.0.0.134`, `5d4b9d2`–`a5e6cce`)
+
+Implemented the **Safe "Delete Target" Workflow** (`IDEAS.md` §2) across backend, CGI, ExtJS UI, and tests (10/10 automated suites passing, including `tests/test_delete_target.sh` and `tests/test_ui_build.sh`):
+
+- **Defense-in-depth server-side guards (`webman/scripts/common.sh` + `webman/migrate.cgi`):** `ensure_delete_target_allowed` rejects `/volume1`, invalid/protected app names (`MountFix`, `..`), missing `/volume1` fallback directories, symlinks, non-canonical paths, active bind mounts or nested submounts in `/proc/mounts`, apps still listed in `etc/mounts.list`/`mountfix.conf`, apps with `enabled: true` in `installed.json`, and busy PIDs (`pids_using_paths`).
+- **Read-only diff preview (`GET migrate.cgi?act=delete_preview`):** Runs `rsync --dry-run --itemize-changes --delete` (`SSD -> HDD`), handles both GNU `rsync 3.x` (11-char) and `openrsync` (9-char) itemized lines while ignoring benign `.d..t*` directory mtime noise, and returns `extraOnSsd`, `modifiedOnSsd`, `onlyOnHdd`, reclaimable size, and up to 20 sample paths.
+- **Safe deletion (`POST migrate.cgi?act=delete_target&confirm=<app>`):** Enforces `POST`, ADM admin session, and exact `confirm=<app>`, acquires `/tmp/mountfix.lock` (with bounded retry for chained `sync_back` lock handoff), re-verifies all pre-conditions under lock, deletes via `find "$real_tgt" -xdev -depth -delete` (with safe fallback), appends a timestamped audit entry to `var/mountfix.log`, and returns refreshed `volumes` free space.
+- **UI & ADM 5.1.5 field fixes (`0.0.0.132`–`0.0.0.134`):**
+  - Added `#btnDeleteTarget` to the **Options** toolbar (disabled unless stopped, unmounted, not configured for boot, `existsInTarget`, and not validating) and an `AS.ARC.subWindow` confirmation modal offering `[Delete target | Cancel]` when in sync or `[Sync back & Delete target | Delete target only | Cancel]` when differences exist.
+  - **Live ADM 5.1.5 discovery (`adm3.css`):** Direct `layout: 'vbox'` on `AS.ARC.subWindow` pushes secondary children onto `fbar`, and `adm3.css` globally hides all raw `<input type="checkbox">` (`display: none;`) while drawing ADM's themed 16×16 sprite on `input[type="checkbox"] + label span`. Fixed by using `layout: 'fit'` with a single `autoScroll: true` panel and ADM's sibling `<input type="checkbox" id="..."><label for="..."><span></span><div>...</div></label>` markup.
+  - Captured all verified ADM 5.1.5 ExtJS/CSS rules in `docs/ADM-UI-GUIDELINES.md` (`a5e6cce`) and added `.adm-ref/` to `.gitignore` for optional local-only reference copies.

@@ -130,7 +130,7 @@ The **HDD Monitor** tab helps you find out **which processes or AppCentral appli
    - **`(kernel/short-lived process)`** means either a kernel metadata/journal operation with no userspace I/O or a very short process that exited before the sample finished.
 
 ### Important Rules & Awareness
-- **Always stop the app first:** Attempting to copy, mount, unmount, or sync-back a running app is blocked by both the UI and the backend (`pids_using_paths` check) to prevent database or filesystem corruption.
+- **Always stop the app first:** Attempting to copy, mount, unmount, sync-back, or delete target data of a running app is blocked by both the UI and the backend (`installed.json` + `pids_using_paths` check) to prevent database or filesystem corruption.
 - **Understand mirror mode (`--delete`):** Both **Sync back** and **Copy to target** (when overwriting an existing target directory) use `rsync --delete`. Files removed on the source side will also be removed on the destination side.
 - **Be careful with `entware`:** `entware` provides `jq`, `bash`, and `rsync` used by MountFix and starts *after* `S02MountFix`. MountFix displays an explicit warning before copying or mounting `entware`.
 - **Disabling MountFix in AppCentral:** Disabling or upgrading MountFix while relocated apps are running will **not** crash or unmount them; they stay mounted on SSD until the next reboot (after which a disabled MountFix will not re-mount them).
@@ -152,7 +152,7 @@ The **HDD Monitor** tab helps you find out **which processes or AppCentral appli
 
 ## Developer Reference
 
-- **APKG Layout:** `CONTROL/` (manifest, lifecycle hooks, `lib.sh`, `start-stop.sh`), `webman/` (POSIX `sh` CGIs, `scripts/common.sh`, ExtJS 4 UI `mf_actions.js` / `mf_core.js` / `mf_main.js` bundled into `mountfix.js`), `etc/` (`mountfix.conf`, generated `mounts.list`).
+- **APKG Layout:** `CONTROL/` (manifest, lifecycle hooks, `lib.sh`, `start-stop.sh`), `webman/` (POSIX `sh` CGIs, `scripts/common.sh`, `scripts/diskwatch.sh`, ExtJS 4 UI `mf_actions.js` / `mf_diskwatch.js` / `mf_core.js` / `mf_main.js` bundled into `mountfix.js`), `etc/` (`mountfix.conf`, generated `mounts.list`), `bin/` (bundled `iotop-static`).
 - **CGI API:** All endpoints require a valid ADM administrator `sid`; mutating actions require `POST`.
   - `GET config.cgi?act=get` — returns current config, installed apps (excluding `MountFix`), volumes (SSD/HDD + free space), and package version.
   - `POST config.cgi?act=set` — validates and saves `{targetVolume, selectedApps, enableSysctlTuning}` and regenerates `etc/mounts.list`.
@@ -165,7 +165,7 @@ The **HDD Monitor** tab helps you find out **which processes or AppCentral appli
   - [docs/ADM-UI-GUIDELINES.md](docs/ADM-UI-GUIDELINES.md) — field-verified ASUSTOR ADM 5.1.5 ExtJS 4 / `adm3.css` rules and UI pitfalls.
   - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — internal IPC, transfer engine, lock protocol, and boot/shutdown lifecycle.
   - [docs/TECHNICAL-REVIEW.md](docs/TECHNICAL-REVIEW.md) — full security/reliability audit, ADM 5.1.5 field verification, and Stage 1–2 implementation history.
-  - [IDEAS.md](IDEAS.md) — future roadmap (Safe *Delete target* workflow and optional `validate.cgi` caching).
+  - [IDEAS.md](IDEAS.md) — engineering proposals & optional `validate.cgi` caching roadmap (§2 Safe *Delete target* and §3 *HDD Monitor* implemented).
 
 ---
 

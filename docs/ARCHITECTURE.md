@@ -224,5 +224,5 @@ MountFix includes a read-only background observer (`webman/scripts/diskwatch.sh`
 
 ## 6. Additional Architecture Topics
 
-For full audit history, field findings, and the post-Stage 2 backlog (*Delete target* workflow), see [docs/TECHNICAL-REVIEW.md](TECHNICAL-REVIEW.md) and [IDEAS.md](../IDEAS.md).
+For full audit history, field findings, ADM 5.1.5 UI rules, and the optional `validate.cgi` caching roadmap, see [docs/TECHNICAL-REVIEW.md](TECHNICAL-REVIEW.md), [docs/ADM-UI-GUIDELINES.md](ADM-UI-GUIDELINES.md), and [IDEAS.md](../IDEAS.md).
 
