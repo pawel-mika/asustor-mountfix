@@ -162,6 +162,7 @@ The **HDD Monitor** tab helps you find out **which processes or AppCentral appli
   - `GET migrate.cgi?act=delete_preview&app=NAME&target=VOL` / `POST migrate.cgi?act=delete_target&app=NAME&target=VOL&confirm=NAME` — inspects SSD vs. HDD differences (`rsync --dry-run`) and safely removes `<target>/AppCentral/<app>` under `/tmp/mountfix.lock`.
   - `POST diskwatch.cgi?act=start&duration=SEC[&collector=MODE]` / `POST diskwatch.cgi?act=stop` / `GET diskwatch.cgi?act=status` — controls and polls the read-only HDD Activity Monitor (`30`s up to `43200`s / `12h`).
 - **Additional Documentation:**
+  - [docs/ADM-UI-GUIDELINES.md](docs/ADM-UI-GUIDELINES.md) — field-verified ASUSTOR ADM 5.1.5 ExtJS 4 / `adm3.css` rules and UI pitfalls.
   - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — internal IPC, transfer engine, lock protocol, and boot/shutdown lifecycle.
   - [docs/TECHNICAL-REVIEW.md](docs/TECHNICAL-REVIEW.md) — full security/reliability audit, ADM 5.1.5 field verification, and Stage 1–2 implementation history.
   - [IDEAS.md](IDEAS.md) — future roadmap (Safe *Delete target* workflow and optional `validate.cgi` caching).

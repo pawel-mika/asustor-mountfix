@@ -6,3 +6,4 @@ out/
 *.bak*
 tests/*.bak*
 GEMINI.md
+.adm-ref/
