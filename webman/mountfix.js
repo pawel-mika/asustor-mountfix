@@ -772,7 +772,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         page._pollTimer = setTimeout(poll, 500);
     },
 
-    buildDeleteTargetSummaryHtml: function (target, app, preview) {
+    buildDeleteTargetSummaryHtml: function (target, app, preview, chkId) {
         var enc = Ext.String.htmlEncode;
         var p = preview || {};
         var counts = p.counts || {};
@@ -825,9 +825,18 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
         html +=
             '<div style="color:#991b1b; margin-top:4px;">' +
-            '<b>Warning:</b> Deletion is permanent and cannot be undone. Confirm below to enable deletion.' +
-            '</div>' +
+            '<b>Warning:</b> Deletion is permanent and cannot be undone.' +
             '</div>';
+
+        if (chkId) {
+            html +=
+                '<label for="' + enc(chkId) + '" style="display:flex; align-items:center; gap:8px; margin-top:12px; padding:8px 10px; background:#f9fafb; border:1px solid #d1d5db; border-radius:4px; cursor:pointer; user-select:none; color:#111827;">' +
+                '<input type="checkbox" id="' + enc(chkId) + '" style="width:16px; height:16px; margin:0; flex-shrink:0; cursor:pointer; accent-color:#007dff;">' +
+                '<span>I understand that deleting <b>' + enc(targetPath) + '</b> is permanent and cannot be undone.</span>' +
+                '</label>';
+        }
+
+        html += '</div>';
         return html;
     },
 
@@ -835,11 +844,8 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
         var page = this;
         var hasDiff = !!(preview && (preview.hasDifferences || preview.hasHddOnly));
         var targetPath = (preview && preview.targetPath) || (target + '/AppCentral/' + app);
-        var summaryHtml = page.buildDeleteTargetSummaryHtml(target, app, preview);
-        var checkboxLabel =
-            'I understand that deleting ' +
-            Ext.String.htmlEncode(targetPath) +
-            ' is permanent and cannot be undone.';
+        var chkId = (Ext.id && Ext.id(null, 'mf-del-chk-')) || ('mf-del-chk-' + Date.now());
+        var summaryHtml = page.buildDeleteTargetSummaryHtml(target, app, preview, chkId);
 
         if (Ext.ClassManager && Ext.ClassManager.isCreated('AS.ARC.subWindow')) {
             var dlg = null;
@@ -900,39 +906,27 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 parentWin: page.win,
                 title: 'Delete Target Copy: ' + app,
                 width: 640,
-                height: hasDiff ? 460 : 330,
+                height: hasDiff ? 470 : 340,
                 layout: 'fit',
                 modal: true,
                 items: [
                     {
                         xtype: 'panel',
                         border: false,
+                        autoScroll: true,
                         bodyPadding: '12 16',
-                        layout: {
-                            type: 'vbox',
-                            align: 'stretch',
+                        html: summaryHtml,
+                        listeners: {
+                            afterrender: function (panel) {
+                                var dom = panel.getEl && panel.getEl().dom;
+                                var cb = (dom && dom.querySelector('#' + chkId)) || (typeof document !== 'undefined' && document.getElementById(chkId));
+                                if (cb) {
+                                    cb.addEventListener('change', function () {
+                                        setDeleteButtonsEnabled(!!cb.checked);
+                                    });
+                                }
+                            },
                         },
-                        items: [
-                            {
-                                xtype: 'panel',
-                                border: false,
-                                flex: 1,
-                                autoScroll: true,
-                                html: summaryHtml,
-                            },
-                            {
-                                xtype: 'checkbox',
-                                itemId: 'chkConfirmDeleteTarget',
-                                height: 28,
-                                margin: '8 0 0 0',
-                                boxLabel: checkboxLabel,
-                                listeners: {
-                                    change: function (cb, checked) {
-                                        setDeleteButtonsEnabled(!!checked);
-                                    },
-                                },
-                            },
-                        ],
                     },
                 ],
                 fbar: fbar,

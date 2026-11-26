@@ -696,12 +696,18 @@ assert.strictEqual(
     'Delete target|Cancel',
     'In-sync modal must show [Delete target, Cancel]',
 );
-const confirmChk = createdDialogs[0].cfg.items[0].items[1];
-assert.strictEqual(confirmChk.xtype, 'checkbox', 'Confirmation control must be a checkbox');
+const inSyncPanel = createdDialogs[0].cfg.items[0];
+assert(inSyncPanel.html.includes('type="checkbox"'), 'Modal HTML must include native confirmation checkbox');
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, true, 'Delete target must start disabled');
-confirmChk.listeners.change(confirmChk, true);
+let inSyncChangeHandler = null;
+const mockInSyncCb = { checked: false, addEventListener(ev, fn) { if (ev === 'change') inSyncChangeHandler = fn; } };
+inSyncPanel.listeners.afterrender({ getEl: () => ({ dom: { querySelector: () => mockInSyncCb } }) });
+assert(inSyncChangeHandler, 'afterrender must attach change listener to checkbox');
+mockInSyncCb.checked = true;
+inSyncChangeHandler();
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, false, 'Checking confirmation must enable Delete target');
-confirmChk.listeners.change(confirmChk, false);
+mockInSyncCb.checked = false;
+inSyncChangeHandler();
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, true, 'Unchecking confirmation must re-disable Delete target');
 
 // Diff preview opens subWindow with [Sync back & Delete target, Delete target only, Cancel]
@@ -720,10 +726,14 @@ assert.strictEqual(
     'Sync back & Delete target|Delete target only|Cancel',
     'Diff modal must show [Sync back & Delete target, Delete target only, Cancel]',
 );
-const diffChk = createdDialogs[0].cfg.items[0].items[1];
+const diffPanel = createdDialogs[0].cfg.items[0];
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmSyncAndDelete'].disabled, true);
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, true);
-diffChk.listeners.change(diffChk, true);
+let diffChangeHandler = null;
+const mockDiffCb = { checked: false, addEventListener(ev, fn) { if (ev === 'change') diffChangeHandler = fn; } };
+diffPanel.listeners.afterrender({ getEl: () => ({ dom: { querySelector: () => mockDiffCb } }) });
+mockDiffCb.checked = true;
+diffChangeHandler();
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmSyncAndDelete'].disabled, false);
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, false);
 
