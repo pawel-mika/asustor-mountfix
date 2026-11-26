@@ -308,17 +308,19 @@ get_configured_apps_for_volume() {
     local target_vol="${1:-}"
     local config_file="${CONFIG_FILE:-/usr/local/AppCentral/MountFix/etc/mountfix.conf}"
     local mounts_list="${MOUNTS_LIST_FILE:-$(dirname "$config_file")/mounts.list}"
-    local jq_bin
+    local jq_bin jq_out
 
     if [ -f "$config_file" ] && jq_bin=$(find_jq 2>/dev/null); then
-        "$jq_bin" -r --arg vol "$target_vol" '
+        if jq_out=$("$jq_bin" -r --arg vol "$target_vol" '
             if ($vol == "" or (.targetVolume // "") == $vol) then
                 (.selectedApps // [])[] | select(.enabled != false) | .name
             else
                 empty
             end
-        ' "$config_file" 2>/dev/null || true
-        return 0
+        ' "$config_file" 2>/dev/null); then
+            [ -n "$jq_out" ] && printf '%s\n' "$jq_out"
+            return 0
+        fi
     fi
 
     if [ -f "$mounts_list" ]; then
@@ -493,7 +495,7 @@ get_installed_apps_json() {
         return 1
     fi
 
-    jq_bin=$(find_jq 2>/dev/null || printf 'jq')
+    jq_bin=$(find_jq 2>/dev/null) || return 127
     "$jq_bin" -c '[.packages[] | select(.package != "MountFix") | {
       package: .package,
       name: (if (.name | type) == "object" then (.name["en-US"] // .package) else .name end),

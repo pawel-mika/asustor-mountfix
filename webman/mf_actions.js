@@ -125,13 +125,21 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             method: 'GET',
             enableFailureReturn: true,
             success: function (json) {
+                var btnApply = page.win && page.win.down('#btnApply');
+                if (btnApply && btnApply.setDisabled) {
+                    btnApply.setDisabled(false);
+                }
                 page.setMfConfig(json); // Update UI with loaded config
                 page.updateActionsUI();
                 page.validate();
                 page.unmaskWindow(actionMsg);
             },
-            failure: function () {
-                page.updateStatus('Error: Failed to load configuration', true);
+            failure: function (json) {
+                var btnApply = page.win && page.win.down('#btnApply');
+                if (btnApply && btnApply.setDisabled) {
+                    btnApply.setDisabled(true);
+                }
+                page.updateStatus('Error: ' + ((json && json.error) || 'Failed to load configuration'), true, true);
                 page.unmaskWindow(actionMsg);
             },
         });

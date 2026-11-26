@@ -16,7 +16,13 @@ ACTION_RAW=$(get_query_param "${QUERY_STRING:-}" "act")
 ACTION=$(url_decode "$ACTION_RAW")
 
 if [ "$ACTION" = "get" ]; then
-    APPS_JSON=$(get_installed_apps_json || true)
+    if ! APPS_JSON=$(get_installed_apps_json); then
+        if ! find_jq >/dev/null 2>&1; then
+            send_json_error "Entware/jq is not ready yet (NAS may still be booting). Wait a moment and click Refresh."
+            exit 0
+        fi
+        APPS_JSON="[]"
+    fi
     [ -z "$APPS_JSON" ] && APPS_JSON="[]"
 
     VOLUMES=$(get_volumes_json)

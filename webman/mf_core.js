@@ -100,7 +100,11 @@ Ext.define('AS.ARC.apps.MountFix.core', {
                                     width: 78,
                                     tooltip: 'Re-check mount state and recalculate disk sizes (bypasses size cache)',
                                     handler: function () {
-                                        fn.validate(null, false, { forceRefresh: true });
+                                        if (!fn.cgiConfig || !fn.cgiConfig.config) {
+                                            fn.loadConfig();
+                                        } else {
+                                            fn.validate(null, false, { forceRefresh: true });
+                                        }
                                     },
                                 },
                             ],

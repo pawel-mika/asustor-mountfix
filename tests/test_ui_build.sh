@@ -842,6 +842,32 @@ assert(
 );
 p.stopMigrationMonitor();
 
+// Test: loadConfig failure disables #btnApply and shows persistent error; subsequent success re-enables #btnApply
+ajaxQueue.length = 0;
+statusUpdates.length = 0;
+let applyDisabled = false;
+const mockBtnApply = { setDisabled(v) { applyDisabled = !!v; } };
+p = makePage();
+p.win.down = (sel) => (sel === '#btnApply' ? mockBtnApply : null);
+p.updateStatus = (msg, isErr, persist) => { statusUpdates.push({ msg, isErr, persist }); };
+p.setMfConfig = () => {};
+p.validate = () => {};
+p.updateActionsUI = () => {};
+
+p.loadConfig();
+assert.strictEqual(ajaxQueue.length, 1);
+ajaxQueue[0].failure({ success: false, error: 'Entware/jq is not ready yet (NAS may still be booting).' });
+assert.strictEqual(applyDisabled, true, 'loadConfig failure must disable #btnApply');
+assert(
+    statusUpdates.some((s) => s.msg.includes('Entware/jq is not ready') && s.isErr === true && s.persist === true),
+    'loadConfig failure must show persistent error message from backend',
+);
+
+p.loadConfig();
+assert.strictEqual(ajaxQueue.length, 2);
+ajaxQueue[1].success({ success: true, config: { targetVolume: '/volume2' }, apps: [], volumes: [] });
+assert.strictEqual(applyDisabled, false, 'loadConfig success must re-enable #btnApply');
+
 sandbox.AS.ARC.ajax = origAjaxTwoTier;
 EOF
 fi

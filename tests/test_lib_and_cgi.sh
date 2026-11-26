@@ -1044,4 +1044,114 @@ VAL_BAD_MODE=$(assert_cgi_json "$(
 jq -e '.success == false and (.error | contains("Invalid mode"))' >/dev/null <<<"$VAL_BAD_MODE" || \
     fail "Invalid mode was not rejected: $VAL_BAD_MODE"
 
-echo "PASS: All shared library, F14 protection, url_decode, JSON helper, CGI hardening, F13 NVMe/df, F3, batched du, two-tier cache, and POST-only tests passed."
+# ---------------------------------------------------------------------------
+# 17. Early-boot Entware/jq unavailability (broken ELF interpreter before S52entware)
+# ---------------------------------------------------------------------------
+echo "Test 17: Early-boot broken jq detection, mounts.list fallback, and fail-closed config/apps CGI..."
+
+BROKEN_BIN_DIR="$TMP_DIR/broken_jq_bin"
+mkdir -p "$BROKEN_BIN_DIR"
+# Create a +x jq stub whose interpreter does not exist (mirrors Entware jq before /opt is mounted)
+cat > "$BROKEN_BIN_DIR/jq" <<'EOF'
+#!/nonexistent/opt/lib/ld-linux-x86-64.so.2
+exit 127
+EOF
+chmod +x "$BROKEN_BIN_DIR/jq"
+
+# Also provide minimal POSIX utilities on isolated PATH without system jq
+SAFE_TOOLS_DIR="$TMP_DIR/safe_tools"
+mkdir -p "$SAFE_TOOLS_DIR"
+for tool in sh awk sed grep cut tr head tail cat wc basename dirname mkdir rm mv cp stat date printf mktemp ls; do
+    tool_path=$(command -v "$tool" 2>/dev/null || true)
+    if [ -n "$tool_path" ] && [ -x "$tool_path" ]; then
+        ln -sf "$tool_path" "$SAFE_TOOLS_DIR/$tool"
+    fi
+done
+# Note: webman/scripts/common.sh appends /usr/bin:/bin to PATH, so we override find_jq
+# test directly with PATH="$BROKEN_BIN_DIR:$SAFE_TOOLS_DIR" on lib.sh (no /usr/bin/jq)
+(
+    # shellcheck disable=SC1091
+    . "$REPO_ROOT/CONTROL/lib.sh"
+    if PATH="$BROKEN_BIN_DIR:$SAFE_TOOLS_DIR" find_jq >/dev/null 2>&1; then
+        fail "find_jq must reject a +x jq binary that fails to execute"
+    fi
+)
+
+# 17b. get_configured_apps_for_volume falls back to mounts.list when jq fails
+BOOT_ETC="$TMP_DIR/boot_etc"
+mkdir -p "$BOOT_ETC"
+printf '{"targetVolume":"/volume2","selectedApps":[{"name":"docker-ce"}],"enableSysctlTuning":true}\n' > "$BOOT_ETC/mountfix.conf"
+printf '/volume2/AppCentral/docker-ce:/volume1/.@plugins/AppCentral/docker-ce\n/volume2/AppCentral/entware:/volume1/.@plugins/AppCentral/entware\n' > "$BOOT_ETC/mounts.list"
+
+FALLBACK_APPS=$(
+    sh -c '
+        . "$1/webman/scripts/common.sh"
+        find_jq() { return 1; }
+        CONFIG_FILE="$2/mountfix.conf" MOUNTS_LIST_FILE="$2/mounts.list" get_configured_apps_for_volume "/volume2"
+    ' _ "$REPO_ROOT" "$BOOT_ETC"
+)
+printf '%s\n' "$FALLBACK_APPS" | grep -qxF "docker-ce" || fail "mounts.list fallback missed docker-ce: [$FALLBACK_APPS]"
+printf '%s\n' "$FALLBACK_APPS" | grep -qxF "entware" || fail "mounts.list fallback missed entware: [$FALLBACK_APPS]"
+
+# Also verify fallback triggers even if jq exists but returns non-zero (e.g., corrupted JSON)
+printf '{broken json\n' > "$BOOT_ETC/corrupt.conf"
+CORRUPT_FALLBACK=$(
+    sh -c '
+        . "$1/webman/scripts/common.sh"
+        CONFIG_FILE="$2/corrupt.conf" MOUNTS_LIST_FILE="$2/mounts.list" get_configured_apps_for_volume "/volume2"
+    ' _ "$REPO_ROOT" "$BOOT_ETC"
+)
+printf '%s\n' "$CORRUPT_FALLBACK" | grep -qxF "docker-ce" || fail "corrupt config fallback missed docker-ce: [$CORRUPT_FALLBACK]"
+
+# 17c. config.cgi and apps.cgi fail closed when jq is unavailable (instead of returning apps: [])
+BOOT_INSTALLED="$TMP_DIR/boot_installed.json"
+printf '{"packages":[{"package":"docker-ce","name":"Docker Engine","enabled":true,"icon":"x.png"}]}\n' > "$BOOT_INSTALLED"
+
+# Wrapper common.sh that sources real common.sh then simulates unavailable Entware/jq
+NO_JQ_COMMON="$TMP_DIR/no_jq_common.sh"
+cat > "$NO_JQ_COMMON" <<EOF
+. "$REPO_ROOT/webman/scripts/common.sh"
+find_jq() { return 1; }
+EOF
+
+CFG_NO_JQ=$(assert_cgi_json "$(
+    INSTALLED_APPS_JSON="$BOOT_INSTALLED" \
+    CONFIG_FILE="$BOOT_ETC/mountfix.conf" \
+    MF_CONFIG_DIR="$BOOT_ETC" \
+    QUERY_STRING="$VALID_SID&act=get" \
+    ADM_AUTH_CGI="$MOCK_ADM_AUTH" \
+    MOUNTFIX_WEBMAN_COMMON_SH="$NO_JQ_COMMON" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
+    sh "$REPO_ROOT/webman/config.cgi"
+)" "config.cgi when jq unavailable")
+jq -e '.success == false and (.error | contains("Entware/jq is not ready"))' >/dev/null <<<"$CFG_NO_JQ" || \
+    fail "config.cgi must fail closed when jq is unavailable, got: $CFG_NO_JQ"
+
+APPS_NO_JQ=$(assert_cgi_json "$(
+    INSTALLED_APPS_JSON="$BOOT_INSTALLED" \
+    QUERY_STRING="$VALID_SID&act=get" \
+    ADM_AUTH_CGI="$MOCK_ADM_AUTH" \
+    MOUNTFIX_WEBMAN_COMMON_SH="$NO_JQ_COMMON" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
+    sh "$REPO_ROOT/webman/apps.cgi"
+)" "apps.cgi when jq unavailable")
+jq -e '.success == false and (.error | contains("Entware/jq is not ready"))' >/dev/null <<<"$APPS_NO_JQ" || \
+    fail "apps.cgi must fail closed when jq is unavailable, got: $APPS_NO_JQ"
+
+# 17d. validate.cgi still reports configured=true via mounts.list when jq is unavailable
+VAL_NO_JQ=$(assert_cgi_json "$(
+    DIR_VOL1="$F3_VOL1" \
+    VOLUME_ROOT="$F3_VOL_ROOT" \
+    CONFIG_FILE="$BOOT_ETC/mountfix.conf" \
+    MOUNTS_LIST_FILE="$BOOT_ETC/mounts.list" \
+    MF_CONFIG_DIR="$BOOT_ETC" \
+    QUERY_STRING="$VALID_SID&act=get&target=/volume2&mode=fast" \
+    ADM_AUTH_CGI="$MOCK_ADM_AUTH" \
+    MOUNTFIX_WEBMAN_COMMON_SH="$NO_JQ_COMMON" \
+    MOUNTFIX_LIB_SH="$REPO_ROOT/CONTROL/lib.sh" \
+    sh "$REPO_ROOT/webman/validate.cgi"
+)" "validate.cgi mode=fast without jq")
+jq -e '.success == true and ([.apps[] | select(.name == "docker-ce" and .configured == true)] | length == 1)' >/dev/null <<<"$VAL_NO_JQ" || \
+    fail "validate.cgi must fall back to mounts.list when jq is unavailable, got: $VAL_NO_JQ"
+
+echo "PASS: All shared library, F14 protection, url_decode, JSON helper, CGI hardening, F13 NVMe/df, F3, batched du, two-tier cache, early-boot jq fallback, and POST-only tests passed."

@@ -685,3 +685,22 @@ Completed the remaining optional `IDEAS.md` §1 items (Approaches **C** and **D.
   2. Made `_stream_rsync_progress()` unbuffered across GNU (`stdbuf -i0 -o0 tr`), BSD (`tr -u`), and BusyBox (`tr` + POSIX `read`) pipelines.
   3. Updated `monitorMigrationStatus()` to update both the active mask text (`updateMaskMessage()`) and persistent footer `#statusInfo` (`persist: true`) with live `%` and transfer rate (`formatTransferProgress()`).
 - **HDD-only NAS guidance:** Added clear notes in `CONTROL/description.txt`, `README.md`, and the in-app *MountFix Quick Guide* explaining that the read-only **HDD Monitor** tab is useful even on HDD-only NAS systems without an SSD.
+
+---
+
+## 15. Field Verification — NAS Reboot & Early-Boot `Entware`/`jq` Race Condition
+
+During a live NAS reboot test on ADM 5.1.5 (`0.0.0.135`):
+- **Shutdown & boot mounts verified:** ADM System Log confirmed `K02MountFix` cleanly terminated lingering `tmux`/`bash` holders on `/volume1/.@plugins/AppCentral/entware` (`SIGTERM` → `SIGKILL`) during `REBOOT`, and `S02MountFix` cleanly re-established all bind mounts (`docker-ce`, `download-center`, `entware`, `minidlna`) on `/volume2/AppCentral/*` at boot using `etc/mounts.list`.
+- **Early-boot UI race condition discovered:** Opening MountFix in the ADM portal *before* `S52entware` finished starting (before the boot-complete beep) rendered all apps as `• Stopped`, unchecked all `Boot` boxes, and flagged the 4 already-mounted apps as `Mounted (not in boot)` — while `/volume2` and the `sysctl` checkbox still loaded normally. Reopening after the boot beep showed the normal UI.
+- **Root cause:**
+  1. `find_jq()` in `CONTROL/lib.sh` only checked `[ -x "$candidate" ]` (and `command -v jq`). Because `S02MountFix` already mounted `entware`, `/usr/local/AppCentral/entware/opt/bin/jq` existed with `+x`, so `find_jq()` returned it — even though executing it fails until `S52entware` creates `/opt` (Entware ELF interpreter `/opt/lib/ld-linux-x86-64.so.2`).
+  2. `get_installed_apps_json()` failed silently, causing `config.cgi` to return `"apps": []` with `success: true`, so `validate.cgi` added rows without `enabled` (`• Stopped`).
+  3. `get_configured_apps_for_volume()` in `webman/scripts/common.sh` swallowed the `jq` error (`|| true`) and returned `0`, bypassing its own `etc/mounts.list` fallback (`configured: false` → `Mounted (not in boot)`).
+- **Fix (fail-closed + real fallback):**
+  1. `find_jq()` (`CONTROL/lib.sh`) now probes execution (`"$candidate" --version >/dev/null 2>&1`) for both `PATH` and fallback candidates.
+  2. `get_configured_apps_for_volume()` (`webman/scripts/common.sh`) only returns early if `jq` exits `0`; otherwise it falls through to `etc/mounts.list`.
+  3. `config.cgi` and `apps.cgi` fail closed with a clear `"Entware/jq is not ready yet (NAS may still be booting)..."` error when `jq` is unavailable instead of returning `"apps": []`.
+  4. `loadConfig()` (`webman/mf_actions.js`) displays the backend error persistently and disables `#btnApply` until a successful config load (and `#btnRefresh` in `webman/mf_core.js` retries `loadConfig()` when initial load failed).
+  5. Covered by automated regression tests in `tests/test_lib_and_cgi.sh` (Test 17) and `tests/test_ui_build.sh`.
+- **Architectural note (deeper root cause):** While boot/shutdown (`CONTROL/start-stop.sh`) is fully decoupled from Entware via `etc/mounts.list`, the CGI/UI layer still depends on Entware's `jq` (`depends: ["entware"]` in `CONTROL/config.json`), so UI access remains blocked until `S52entware` finishes starting `/opt`. The fix above resolves the fail-open bugs (`[ -x ]` false positive, dead `mounts.list` fallback, silent `apps: []` with active `Apply`), whereas eliminating the runtime dependency completely (allowing the UI to load even while Entware is stopped or still booting) would require either bundling a static `jq` binary in `bin/` (analogous to `bin/iotop-static`) or parsing JSON without `jq`.

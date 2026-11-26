@@ -162,15 +162,18 @@ pids_using_paths() {
     done
 }
 
-# Resolve jq binary even when Entware is not on PATH (e.g., ADM upgrade/init)
+# Resolve a working jq binary even when Entware is not on PATH (e.g., ADM upgrade/init).
+# Probes execution (--version) because Entware binaries under /usr/local/AppCentral/entware/opt/bin
+# exist (+x) before S52entware creates /opt, but fail to exec without /opt/lib/ld-linux*.
 find_jq() {
-    if command -v jq >/dev/null 2>&1; then
-        command -v jq
+    local candidate
+    if candidate=$(command -v jq 2>/dev/null) && [ -n "$candidate" ] && "$candidate" --version >/dev/null 2>&1; then
+        printf '%s\n' "$candidate"
         return 0
     fi
     for candidate in /usr/local/AppCentral/entware/opt/bin/jq /opt/bin/jq; do
-        if [ -x "$candidate" ]; then
-            echo "$candidate"
+        if [ -x "$candidate" ] && "$candidate" --version >/dev/null 2>&1; then
+            printf '%s\n' "$candidate"
             return 0
         fi
     done
