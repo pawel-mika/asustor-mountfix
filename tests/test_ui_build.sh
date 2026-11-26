@@ -697,7 +697,10 @@ assert.strictEqual(
     'In-sync modal must show [Delete target, Cancel]',
 );
 const inSyncPanel = createdDialogs[0].cfg.items[0];
-assert(inSyncPanel.html.includes('type="checkbox"'), 'Modal HTML must include native confirmation checkbox');
+assert(
+    /<input type="checkbox" id="[^"]+"><label for="[^"]+"[^>]*><span[^>]*><\/span><div>/.test(inSyncPanel.html),
+    'Modal HTML must use ADM adm3.css sibling input[type="checkbox"] + label > span sprite structure',
+);
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, true, 'Delete target must start disabled');
 let inSyncChangeHandler = null;
 const mockInSyncCb = { checked: false, addEventListener(ev, fn) { if (ev === 'change') inSyncChangeHandler = fn; } };

@@ -829,11 +829,15 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             '</div>';
 
         if (chkId) {
+            // ADM adm3.css hides raw input[type="checkbox"] (display:none) and draws its themed 16x16 sprite on `input[type="checkbox"] + label span`
             html +=
-                '<label for="' + enc(chkId) + '" style="display:flex; align-items:center; gap:8px; margin-top:12px; padding:8px 10px; background:#f9fafb; border:1px solid #d1d5db; border-radius:4px; cursor:pointer; user-select:none; color:#111827;">' +
-                '<input type="checkbox" id="' + enc(chkId) + '" style="width:16px; height:16px; margin:0; flex-shrink:0; cursor:pointer; accent-color:#007dff;">' +
-                '<span>I understand that deleting <b>' + enc(targetPath) + '</b> is permanent and cannot be undone.</span>' +
-                '</label>';
+                '<div style="margin-top:12px; padding:8px 10px; background:#f9fafb; border:1px solid #d1d5db; border-radius:4px;">' +
+                '<input type="checkbox" id="' + enc(chkId) + '">' +
+                '<label for="' + enc(chkId) + '" style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; color:#111827; line-height:18px;">' +
+                '<span style="flex-shrink:0;"></span>' +
+                '<div>I understand that deleting <b>' + enc(targetPath) + '</b> is permanent and cannot be undone.</div>' +
+                '</label>' +
+                '</div>';
         }
 
         html += '</div>';
