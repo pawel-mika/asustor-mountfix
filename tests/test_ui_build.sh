@@ -690,17 +690,19 @@ p.showDeleteTargetDialog('/volume2', 'minidlna', {
     samples: [],
 });
 assert.strictEqual(createdDialogs.length, 1);
+assert.strictEqual(createdDialogs[0].cfg.layout, 'fit', 'subWindow must use layout: fit for ADM 5.1.5 compatibility');
 assert.strictEqual(
     createdDialogs[0].cfg.fbar.map((b) => b.text).join('|'),
     'Delete target|Cancel',
     'In-sync modal must show [Delete target, Cancel]',
 );
-const confirmField = createdDialogs[0].cfg.items[1].items[0];
+const confirmChk = createdDialogs[0].cfg.items[0].items[1];
+assert.strictEqual(confirmChk.xtype, 'checkbox', 'Confirmation control must be a checkbox');
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, true, 'Delete target must start disabled');
-confirmField.listeners.change(confirmField, 'minidln');
-assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, true, 'Partial app name must keep Delete target disabled');
-confirmField.listeners.change(confirmField, 'minidlna');
-assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, false, 'Exact app name must enable Delete target');
+confirmChk.listeners.change(confirmChk, true);
+assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, false, 'Checking confirmation must enable Delete target');
+confirmChk.listeners.change(confirmChk, false);
+assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, true, 'Unchecking confirmation must re-disable Delete target');
 
 // Diff preview opens subWindow with [Sync back & Delete target, Delete target only, Cancel]
 createdDialogs = [];
@@ -718,10 +720,10 @@ assert.strictEqual(
     'Sync back & Delete target|Delete target only|Cancel',
     'Diff modal must show [Sync back & Delete target, Delete target only, Cancel]',
 );
-const diffField = createdDialogs[0].cfg.items[1].items[0];
+const diffChk = createdDialogs[0].cfg.items[0].items[1];
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmSyncAndDelete'].disabled, true);
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, true);
-diffField.listeners.change(diffField, 'minidlna');
+diffChk.listeners.change(diffChk, true);
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmSyncAndDelete'].disabled, false);
 assert.strictEqual(createdDialogs[0]._btnMap['#btnConfirmDeleteTarget'].disabled, false);
 

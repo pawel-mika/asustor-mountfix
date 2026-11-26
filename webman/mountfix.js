@@ -825,7 +825,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
 
         html +=
             '<div style="color:#991b1b; margin-top:4px;">' +
-            '<b>Warning:</b> Deletion is permanent and cannot be undone. Type <b>' + enc(app) + '</b> below to enable deletion.' +
+            '<b>Warning:</b> Deletion is permanent and cannot be undone. Confirm below to enable deletion.' +
             '</div>' +
             '</div>';
         return html;
@@ -834,7 +834,12 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
     showDeleteTargetDialog: function (target, app, preview) {
         var page = this;
         var hasDiff = !!(preview && (preview.hasDifferences || preview.hasHddOnly));
+        var targetPath = (preview && preview.targetPath) || (target + '/AppCentral/' + app);
         var summaryHtml = page.buildDeleteTargetSummaryHtml(target, app, preview);
+        var checkboxLabel =
+            'I understand that deleting ' +
+            Ext.String.htmlEncode(targetPath) +
+            ' is permanent and cannot be undone.';
 
         if (Ext.ClassManager && Ext.ClassManager.isCreated('AS.ARC.subWindow')) {
             var dlg = null;
@@ -896,36 +901,34 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 title: 'Delete Target Copy: ' + app,
                 width: 640,
                 height: hasDiff ? 460 : 330,
-                layout: {
-                    type: 'vbox',
-                    align: 'stretch',
-                },
+                layout: 'fit',
                 modal: true,
                 items: [
                     {
                         xtype: 'panel',
                         border: false,
-                        flex: 1,
-                        autoScroll: true,
-                        bodyPadding: '12 16 6 16',
-                        html: summaryHtml,
-                    },
-                    {
-                        xtype: 'container',
-                        padding: '6 16 12 16',
-                        layout: 'anchor',
+                        bodyPadding: '12 16',
+                        layout: {
+                            type: 'vbox',
+                            align: 'stretch',
+                        },
                         items: [
                             {
-                                xtype: 'textfield',
-                                itemId: 'txtConfirmDeleteApp',
-                                anchor: '100%',
-                                fieldLabel: 'Type app name',
-                                labelWidth: 110,
-                                emptyText: app,
-                                enableKeyEvents: true,
+                                xtype: 'panel',
+                                border: false,
+                                flex: 1,
+                                autoScroll: true,
+                                html: summaryHtml,
+                            },
+                            {
+                                xtype: 'checkbox',
+                                itemId: 'chkConfirmDeleteTarget',
+                                height: 28,
+                                margin: '8 0 0 0',
+                                boxLabel: checkboxLabel,
                                 listeners: {
-                                    change: function (field, newVal) {
-                                        setDeleteButtonsEnabled((newVal || '') === app);
+                                    change: function (cb, checked) {
+                                        setDeleteButtonsEnabled(!!checked);
                                     },
                                 },
                             },
@@ -936,12 +939,12 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             });
             dlg.show();
         } else {
-            Ext.Msg.prompt(
+            Ext.Msg.confirm(
                 'Delete Target Copy: ' + app,
-                'Permanently delete ' + Ext.String.htmlEncode(target + '/AppCentral/' + app) + '? Type ' + Ext.String.htmlEncode(app) + ' to confirm:',
-                function (btn, text) {
-                    if (btn === 'ok' && text === app) {
-                        page.executeDeleteTarget(target, app, text);
+                'Permanently delete ' + Ext.String.htmlEncode(targetPath) + '? This action cannot be undone.',
+                function (btn) {
+                    if (btn === 'yes') {
+                        page.executeDeleteTarget(target, app, app);
                     }
                 },
             );
@@ -1036,7 +1039,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             '<b>Important safety rules:</b><br>' +
             '&bull; Always stop an application before copying, mounting, unmounting, syncing back, or deleting target data.<br>' +
             '&bull; <b>Sync back</b> and overwriting an existing target use mirror mode (<code>--delete</code>).<br>' +
-            '&bull; <b>Delete target</b> previews SSD vs. HDD differences first and requires typing the app name.<br>' +
+            '&bull; <b>Delete target</b> previews SSD vs. HDD differences first and requires explicit confirmation.<br>' +
             '&bull; Unmount all apps before uninstalling MountFix (uninstall is blocked while mounts are active).<br>' +
             '&bull; Kernel <code>sysctl</code> tuning is optional (off by default) and applies on boot only.<br><br>' +
             '<a href="' + docUrl + '" target="_blank" rel="noopener noreferrer" style="color: #007dff; text-decoration: underline;">' +
