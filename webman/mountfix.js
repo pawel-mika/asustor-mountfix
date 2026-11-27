@@ -1047,6 +1047,9 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                 title: 'Delete Target Copy: ' + app,
                 width: 640,
                 height: hasDiff ? 470 : 340,
+                minWidth: 520,
+                minHeight: 320,
+                resizable: true,
                 layout: 'fit',
                 modal: true,
                 items: [
@@ -1054,6 +1057,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                         xtype: 'panel',
                         border: false,
                         autoScroll: true,
+                        bodyStyle: 'overflow-y: auto !important; overflow-x: hidden !important;',
                         bodyPadding: '12 16',
                         html: summaryHtml,
                         listeners: {
@@ -1195,8 +1199,11 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             var subDlg = Ext.create('AS.ARC.subWindow', {
                 parentWin: page.win,
                 title: 'MountFix Quick Guide',
-                width: 640,
-                height: 410,
+                width: 660,
+                height: 500,
+                minWidth: 520,
+                minHeight: 320,
+                resizable: true,
                 layout: 'fit',
                 modal: true,
                 items: [
@@ -1204,6 +1211,7 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
                         xtype: 'panel',
                         border: false,
                         autoScroll: true,
+                        bodyStyle: 'overflow-y: auto !important; overflow-x: hidden !important;',
                         bodyPadding: '12 16',
                         html: bodyHtml,
                     },
@@ -1222,8 +1230,8 @@ Ext.define('AS.ARC.apps.MountFix.Actions', {
             var dlg = Ext.create('AS.ARC.msgWindow', {
                 parentWin: page.win,
                 title: 'MountFix Quick Guide',
-                width: 640,
-                height: 380,
+                width: 660,
+                height: 500,
                 iconType: 'info',
                 asItems: [{ xtype: 'displayfield', value: bodyHtml }],
                 fbar: [

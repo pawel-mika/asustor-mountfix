@@ -472,7 +472,13 @@ assert.strictEqual(createdDialogs.length, 1, 'showHelpDialog must open AS.ARC.su
 assert.strictEqual(createdDialogs[0].cls, 'AS.ARC.subWindow');
 assert.strictEqual(createdDialogs[0].shown, true);
 assert.strictEqual(createdDialogs[0].cfg.title, 'MountFix Quick Guide');
+assert(createdDialogs[0].cfg.height >= 500, 'Help dialog must be tall enough to show all bullets and GitHub link');
+assert.strictEqual(createdDialogs[0].cfg.resizable, true, 'Help dialog must be resizable');
 assert.strictEqual(createdDialogs[0].cfg.items[0].autoScroll, true, 'Help dialog panel must be scrollable');
+assert(
+    /overflow-y:\s*auto\s*!important/.test(createdDialogs[0].cfg.items[0].bodyStyle || ''),
+    'Help dialog panel must force overflow-y: auto !important so ADM CSS cannot hide scrollbars',
+);
 assert(createdDialogs[0].cfg.items[0].html.includes('https://github.com/pawel-mika/asustor-mountfix#readme'), 'Help dialog must include GitHub docs link');
 
 // 22. Actions are disabled while validate() is in flight and re-enabled on completion (success or failure)
@@ -696,6 +702,11 @@ p.showDeleteTargetDialog('/volume2', 'minidlna', {
 });
 assert.strictEqual(createdDialogs.length, 1);
 assert.strictEqual(createdDialogs[0].cfg.layout, 'fit', 'subWindow must use layout: fit for ADM 5.1.5 compatibility');
+assert.strictEqual(createdDialogs[0].cfg.resizable, true, 'Delete target subWindow must be resizable');
+assert(
+    /overflow-y:\s*auto\s*!important/.test(createdDialogs[0].cfg.items[0].bodyStyle || ''),
+    'Delete target subWindow panel must force overflow-y: auto !important',
+);
 assert.strictEqual(
     createdDialogs[0].cfg.fbar.map((b) => b.text).join('|'),
     'Delete target|Cancel',
