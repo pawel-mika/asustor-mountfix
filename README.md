@@ -148,7 +148,7 @@ The **HDD Monitor** tab helps you find out **which processes or AppCentral appli
 - **On NAS (runtime):** Installed **Entware** (`opkg`). `CONTROL/pre-install.sh` adds Entware to `PATH` and checks `jq`, `bash`, and `rsync` independently, installing any missing tools via `opkg`.
 - **Local development & packaging:** Requires `jq`, `tar`, and `zip`.
   - `./build.sh` — packages the current version from `CONTROL/config.json` into `./out/` without dirtying tracked files.
-  - `./build.sh --bump` — increments the revision in `CONTROL/config.json` before packaging.
+  - `./build.sh --bump` — increments the SemVer patch version (`MAJOR.MINOR.PATCH`) in `CONTROL/config.json` before packaging.
   - `./tests/run_all.sh` — runs all 10 behavioural and build verification test suites.
 
 ---
@@ -176,4 +176,8 @@ The **HDD Monitor** tab helps you find out **which processes or AppCentral appli
 
 > **Use this software at your own risk.** MountFix performs low-level bind-mount, file-mirroring (`rsync --delete`), and optional Linux kernel (`sysctl`) operations. It is provided *"as is"*, without warranty of any kind. The author is not liable for any data loss, system instability, service downtime, or hardware damage. Future ASUSTOR ADM updates may alter how AppCentral or volumes operate.
 
-Licensed under the **MIT License**.
+Licensed under the **[MIT License](LICENSE)**.
+
+### Third-Party Software
+
+MountFix bundles a statically linked `x86-64` binary of **`iotop-c` 1.31** (`bin/iotop-static`, invoked as a standalone CLI subprocess by the HDD Monitor). `iotop-c` is licensed under the **GNU General Public License v2.0 or later** ([licenses/GPL-2.0.txt](licenses/GPL-2.0.txt)) and statically links `musl` (MIT) and `ncurses` (MIT/X11). Full copyright notices, license terms, and upstream source links are documented in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

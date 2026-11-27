@@ -10,7 +10,7 @@ for arg in "$@"; do
         --bump) BUMP_VERSION=1 ;;
         -h|--help)
             echo "Usage: $0 [--bump]"
-            echo "  --bump   Increment the revision in CONTROL/config.json before packaging."
+            echo "  --bump   Increment the patch version (MAJOR.MINOR.PATCH) in CONTROL/config.json before packaging."
             exit 0
             ;;
         *)
@@ -43,9 +43,13 @@ CONFIG_FILE="./CONTROL/config.json"
 
 if [ -f "$CONFIG_FILE" ] && [ "$BUMP_VERSION" = "1" ]; then
     VERSION=$(jq -r '.general.version' "$CONFIG_FILE")
-    IFS='.' read -r MAJOR MINOR BUILD REVISION <<< "$VERSION"
-    REVISION=$((REVISION + 1))
-    NEW_VERSION="$MAJOR.$MINOR.$BUILD.$REVISION"
+    if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo "Invalid SemVer version in $CONFIG_FILE: '$VERSION' (expected MAJOR.MINOR.PATCH)" >&2
+        exit 1
+    fi
+    IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+    PATCH=$((PATCH + 1))
+    NEW_VERSION="$MAJOR.$MINOR.$PATCH"
     echo "Bump version: $VERSION -> $NEW_VERSION"
     jq ".general.version = \"$NEW_VERSION\"" "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
 elif [ ! -f "$CONFIG_FILE" ]; then
@@ -65,6 +69,12 @@ cp -r webman "$TEMP_FOLDER/"
 cp -r etc "$TEMP_FOLDER/"
 if [ -d bin ]; then
     cp -r bin "$TEMP_FOLDER/"
+fi
+for f in LICENSE THIRD_PARTY_LICENSES.md; do
+    [ -f "$f" ] && cp "$f" "$TEMP_FOLDER/"
+done
+if [ -d licenses ]; then
+    cp -r licenses "$TEMP_FOLDER/"
 fi
 
 # 2.1. Check & create out folder
